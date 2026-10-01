@@ -153,6 +153,8 @@ export interface RunAgentInput {
    * `SystemPromptInput.smartContextGuidance`.
    */
   smartContextGuidance?: string;
+  /** Chapter-jump block — see `SystemPromptInput.chapterJumpGuidance`. */
+  chapterJumpGuidance?: string;
   /**
    * The user's stored preferences, when the conversation injects them and there is at least one
    * — see `SystemPromptInput.preferencesGuidance`.
@@ -426,6 +428,12 @@ export interface SystemPromptInput {
    */
   smartContextGuidance?: string;
   /**
+   * Present on the user turn immediately after a chapter jump. Tells the model which chapter
+   * it is entering and whether teaching had begun there, naming the range call to recover an
+   * earlier stretch — sits right after the smart-context block.
+   */
+  chapterJumpGuidance?: string;
+  /**
    * The user's stored preferences, rendered from the catalog — `chat.preferences` with the rows
    * substituted — and present exactly when at least one applies.
    *
@@ -499,6 +507,9 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
    */
   const smartContext = block(input.smartContextGuidance);
 
+  // Beside the context blocks, right after smart context: the jump-specific statement.
+  const chapterJump = block(input.chapterJumpGuidance);
+
   /*
    * The user's standing preferences, beside the context blocks: they are facts about this
    * conversation's setting, and they qualify every later block that describes how to work.
@@ -563,6 +574,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     about,
     contextSummary,
     smartContext,
+    chapterJump,
     preferences,
     clock,
     workspace,
@@ -748,6 +760,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
         about: input.about,
         contextSummary: input.contextSummary,
         smartContextGuidance: input.smartContextGuidance,
+        chapterJumpGuidance: input.chapterJumpGuidance,
         preferencesGuidance: input.preferencesGuidance,
         preferenceGuidance: input.preferenceGuidance,
         planGuidance: input.planGuidance,

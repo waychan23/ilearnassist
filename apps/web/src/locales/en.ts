@@ -1337,9 +1337,17 @@ const en: typeof MessageSchema = {
     jumpToCompletion: "Jump to where this node was completed",
     jumpToStart: "Jump to where work on this node began",
     jumpToChapter: "Jump to this chapter",
+    jumpToPosition: "Jump to this message position",
+    positionN: "Position {n}",
+    positionsShowHint:
+      "This chapter has been studied several times and holds several message positions — click to expand",
+    positionsHideHint:
+      "This chapter has been studied several times and holds several message positions — click to collapse",
     jumpConfirm: "Jump to chapter {number} {title} now?",
     jumpConfirmDetail:
       "Earlier unfinished chapters (including the one currently in progress) are marked skipped and can be caught up later.",
+    jumpConfirmRestartHint:
+      "This chapter was studied in part before: after the jump the earlier stretch is read back first, so it continues instead of restarting.",
     jumpConfirmOk: "Jump to chapter",
     jumpMessage: "Update progress: jump to chapter {number} {title}",
     adjust: "Adjust plan",
@@ -1353,6 +1361,7 @@ const en: typeof MessageSchema = {
       in_progress: "In progress",
       completed: "Completed",
       skipped: "Skipped",
+      skippedStarted: "Skipped (studied in part)",
       deleted: "Deleted",
     },
   },

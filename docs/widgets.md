@@ -396,6 +396,43 @@ panel shows data the tools produce:
 See `apps/server/src/quizzes.ts` for the domain logic and `apps/web/src/utils/quizTree.ts`
 for the panel's pure tree/filter builder.
 
+### A versioned, progress-tracked widget: the plan widget
+
+The plan widget (`id: "plan"`) holds one plan per conversation across **two kinds of state**:
+
+- `plan_versions.tree_json` are *structural* snapshots — id/title/children, nothing else. Every
+  edit adds a version, and history browsing reads each version exactly as it was left; progress
+  never rewrites it.
+- `plan_nodes` holds each node exactly once under a server UUID that survives renames and moves,
+  and that is the only place progress lives. The current tree is rebuilt from those rows; a node
+  dropped by an edit stays as a `deleted` tombstone at its last place rather than vanishing.
+
+Two rules around skipping and jumping, both load-bearing:
+
+- **A skip preserves the node's start marker.** The progress call that first put a node
+  `in_progress` stays its anchor, and the node records `skipped_at` plus `skipped_message_id` —
+  the last live message at that moment, the abandoned position. So a skipped node that was in
+  progress (it has an anchor/`start_message_id`) shows a `pause` icon, while a never-started skip
+  shows **no icon at all**, like an unstarted node. Resetting to `not_started` is the only thing
+  that clears those markers.
+- **A chapter jump tells the model what it is entering.** `jumpToNode` skips everything undone
+  before the target and reports `started` (whether the target held a start marker),
+  `startMessageId` and `skippedMessageId`. The composed user turn carries them as
+  `chapterJump`; after validation they become a prompt block that — in smart context mode
+  especially — directs the model to read the earlier stretch back with `ila_recall` (`mode:
+  "range"` or `"around"`) and continue, instead of restarting the chapter.
+- **Start positions are a list, not one point.** Every chapter-jump turn lands in
+  `plan_node_starts` (anchor resolution records the first start the same way), so a node taught,
+  skipped and returned to holds several ordered positions. Single-position nodes keep the title
+  click as above; multi-position nodes render a collapsible sub-list styled distinctly from
+  tree children — collapsed it shows `位置1`, expanded `位置1..N`, each jumping to that message.
+
+Anchor ids are tool-call ids and preserved verbatim across a fork; position rows and message
+columns map through the copied-message map — anything whose message was not copied is dropped,
+and the survivors renumber contiguously.
+
+See `apps/server/src/plans.ts` for the domain logic.
+
 ### An out-of-band post-turn widget: the thread widget
 
 The thread widget (`id: "thread"`) names **no tools at all**: it derives its data with a

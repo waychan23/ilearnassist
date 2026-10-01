@@ -43,6 +43,7 @@ import type {
   TitleRetryResult,
   TitleState,
   ToolCall,
+  ChapterJump,
   TurnRequestMeta,
   UpdateCopilotInput,
   UpdateDocumentParserInput,
@@ -133,7 +134,16 @@ import {
 } from "./documents/index.js";
 import { parseWidgetIds, widgetRowsForSelection } from "./widgets.js";
 import { installWidgetForToolUse } from "./widgetInstall.js";
-import { buildPlanView, jumpToNode, readPlanVersion } from "./plans.js";
+import {
+  assertValidChapterJump,
+  buildPlanView,
+  jumpToNode,
+  parseChapterJump,
+  readPlanVersion,
+  recordNodeStart,
+  renderChapterJumpGuidance,
+  resolvePlanStartMessages,
+} from "./plans.js";
 import { buildThreadViews, syncThreads } from "./threads.js";
 import { makeThreadClassifier } from "./agent/threads.js";
 import { makeInsightGenerator } from "./agent/insights.js";
@@ -2819,7 +2829,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
     try {
       const result = jumpToNode(db, id, nodeId);
-      return { plan: result.view, number: result.number, title: result.title, skippedCount: result.skippedCount };
+      return {
+        plan: result.view,
+        number: result.number,
+        title: result.title,
+        skippedCount: result.skippedCount,
+        started: result.started,
+        startMessageId: result.startMessageId,
+        skippedMessageId: result.skippedMessageId,
+      };
     } catch {
       // No plan, unknown/deleted/completed node: the same 404 a missing object gives, since
       // the jump target is the thing that does not exist.
@@ -5464,6 +5482,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * context. Written onto the assistant row as provenance; absent on a full-context turn.
        */
       summaryId?: string;
+      /**
+       * The turn's start instant, bounding which progress-tool skips resolve to this turn's
+       * message. Absent when finishing outside a timed turn.
+       */
+      turnStartedAtIso?: string;
+      /**
+       * The chapter-jump claim when this turn immediately follows a play-button jump. Its
+       * target records a start position at this turn's assistant message.
+       */
+      chapterJump?: ChapterJump;
     }
   ): Promise<void> {
     /*
@@ -5513,6 +5541,26 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       summaryId: opts.summaryId,
     });
     db.touchSession(id);
+
+    /*
+     * Resolve the plan's start/skip message columns now the turn's assistant message exists:
+     * anchors marked during this turn resolve to it, and progress-tool skips made during it
+     * land on it. Failures here must not fail the turn — the call is best effort.
+     */
+    try {
+      resolvePlanStartMessages(db, userId, id, opts.turnStartedAtIso
+        ? { assistantMessageId: assistantMessage.id, sinceIso: opts.turnStartedAtIso }
+        : undefined);
+      // A chapter-jump turn is itself a start/resume position. Same-message dedupe covers the
+      // case the model also made an in_progress call in this message.
+      if (opts.chapterJump) {
+        recordNodeStart(db, db.getPlanBySession(id)!.id, opts.chapterJump.nodeId, {
+          messageId: assistantMessage.id,
+        });
+      }
+    } catch {
+      // A column/position resolution problem never costs the reader their persisted turn.
+    }
 
     /*
      * The turn, in the ledger. One row per finished turn — not per ReAct step — because the model
@@ -5805,6 +5853,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         userMessage: null,
         user: treeFor(actor(request)),
         summaryId: summary?.id,
+        turnStartedAtIso: new Date(turnStartedAt).toISOString(),
       });
     } catch (err) {
       failTurn(id, ctx, err, sse, summary?.id);
@@ -5920,6 +5969,25 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const resolution = resolveReferences(db, userId, id, refs);
     if (!resolution.ok) {
       return reply.code(resolution.status).send(apiError(resolution.code, "reference not found"));
+    }
+
+    /*
+     * The chapter-jump claim, present on the turn right after the play button. Shape parsed
+     * like the rest of the body; the claim verified against the plan before it becomes a
+     * prompt block.
+     */
+    const chapterJump = parseChapterJump(body?.chapterJump);
+    if (chapterJump === null) {
+      return reply.code(400).send(apiError("INVALID_FIELD", "chapterJump is malformed"));
+    }
+    if (chapterJump) {
+      try {
+        assertValidChapterJump(db, userId, id, chapterJump);
+      } catch (err) {
+        return reply
+          .code(400)
+          .send(apiError("INVALID_FIELD", err instanceof Error ? err.message : String(err)));
+      }
     }
 
     /*
@@ -6065,6 +6133,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         exploreGuidance: ctx.exploreGuidance,
         recallGuidance: ctx.recallGuidance,
         smartContextGuidance: ctx.smartContextGuidance,
+        chapterJumpGuidance: chapterJump
+          ? renderChapterJumpGuidance(chapterJump, session.settings.smartContext === true)
+          : undefined,
         preferencesGuidance: ctx.preferencesGuidance,
         preferenceGuidance: ctx.preferenceGuidance,
         onToolUsed: ctx.onToolUsed,
@@ -6081,6 +6152,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         // user pointed at with `@` deserves a description as much as one they dragged in.
         attachments: [...storedAttachments, ...referencedAttachments],
         summaryId: summary?.id,
+        turnStartedAtIso: new Date(turnStartedAt).toISOString(),
+        chapterJump,
       });
     } catch (err) {
       failTurn(id, ctx, err, sse, summary?.id);

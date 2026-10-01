@@ -129,7 +129,8 @@ async function seedSource(): Promise<Fixture> {
     tree: [{ title: "第一章", children: [{ title: "窗口" }] }],
   });
   const nodeId = plan.tree[0]!.children![0]!.id;
-  applyProgress(db, session.id, { nodes: [{ id: nodeId, status: "in_progress" }] }, "anchor-1");
+  // Anchor to a call the tail message carries (copied in a full fork, absent in a cut one).
+  applyProgress(db, session.id, { nodes: [{ id: nodeId, status: "in_progress" }] }, "call-diagram");
 
   // A registered, answered and graded question, numbered from the session counter as a real
   // registration is.
@@ -294,6 +295,30 @@ async function seedSource(): Promise<Fixture> {
   });
   db.setSessionWidgetForUser(env.user.id, session.id, "quiz", true);
 
+  // Message columns on the node: start at the cut message, skip position at the tail — to
+  // verify a copy maps them to its own messages (and drops what was not copied).
+  const planId = db.getPlanBySession(session.id)!.id;
+  db.fillPlanNodeMessageIds(planId, nodeId, cutMessage.id, tailMessage.id);
+  // Two start positions: one at the cut, one at the tail — a full copy carries both, a cut
+  // copy only the first.
+  db.insertPlanNodeStart({
+    id: newId(),
+    planId,
+    nodeId,
+    position: 1,
+    messageId: cutMessage.id,
+    toolCallId: "call-diagram",
+    startedAt: new Date().toISOString(),
+  });
+  db.insertPlanNodeStart({
+    id: newId(),
+    planId,
+    nodeId,
+    position: 2,
+    messageId: tailMessage.id,
+    startedAt: new Date().toISOString(),
+  });
+
   return {
     workspace,
     session,
@@ -339,6 +364,18 @@ describe("POST /api/sessions/:id/messages/:messageId/fork", () => {
     expect(copied.map((m) => m.id)).not.toEqual(sourceMessages.slice(0, 2).map((m) => m.id));
     expect(copied.map((m) => m.id)).not.toContain(fix.tailMessage.id);
 
+    // The tail start position is not copied; the cut survivor renumbers to position 1 and
+    // addresses the copy's own message.
+    const cutPlan = db.getPlanBySession(branch.id)!;
+    const cutStarts = db.listPlanNodeStarts(cutPlan.id);
+    expect(cutStarts).toHaveLength(1);
+    expect(cutStarts[0]).toMatchObject({
+      nodeId: cutStarts[0]!.nodeId,
+      position: 1,
+      messageId: copied[1]!.id,
+      toolCallId: "call-diagram",
+    });
+
     // A full copy carries the graph, all of it new, all of it referring to the copy.
     const full = (await fork(fix.session.id, fix.tailMessage.id, { title: "Full" })).json<Session>();
     const fullMessages = await messagesOf(full.id);
@@ -362,6 +399,20 @@ describe("POST /api/sessions/:id/messages/:messageId/fork", () => {
     expect(copiedNodes.map((n) => n.title)).toEqual(sourceNodes.map((n) => n.title));
     expect(copiedNodes.map((n) => n.id)).not.toEqual(sourceNodes.map((n) => n.id));
     expect(copiedNodes.find((n) => n.id === fix.nodeId)).toBeUndefined();
+
+    // Start/skip message ids map to the copy's own messages (not the source ids).
+    const copiedWindow = copiedNodes.find((n) => n.title === "窗口")!;
+    expect(copiedWindow.startMessageId).toBe(fullMessages[1]!.id);
+    expect(copiedWindow.skippedMessageId).toBe(tailCopy.id);
+    expect(copiedWindow.startMessageId).not.toBe(fix.cutMessage.id);
+
+    // Both start positions carry over, mapped to the copy's messages, tool-call ids kept.
+    const fullStarts = db.listPlanNodeStarts(plan.id);
+    expect(fullStarts.map((s) => [s.position, s.messageId, s.toolCallId])).toEqual([
+      [1, fullMessages[1]!.id, "call-diagram"],
+      [2, tailCopy.id, null],
+    ]);
+
     expect(db.listPlanVersions(plan.id)).toHaveLength(db.listPlanVersions(sourcePlan.id).length);
     // Every version's structural snapshot names the copy's nodes.
     const copiedIds = new Set(copiedNodes.map((n) => n.id));
@@ -469,6 +520,16 @@ describe("POST /api/sessions/:id/messages/:messageId/fork", () => {
     expect(db.listTablesBySession(branch.id)).toEqual([]);
     // Notes with no message anchor travel; this one is anchored after the cut.
     expect(db.listNotesForUser(env.user.id, branch.id)).toEqual([]);
+
+    // The node's anchor sits on a call after the cut, so it drops and with it the message
+    // columns; the skip position at the tail is not copied either.
+    const earlyWindow = db
+      .listPlanNodes(db.getPlanBySession(branch.id)!.id)
+      .find((n) => n.title === "窗口")!;
+    expect(earlyWindow.anchorToolCallId).toBeNull();
+    expect(earlyWindow.startMessageId).toBeNull();
+    expect(earlyWindow.skippedMessageId).toBeNull();
+
     // Held material, references, insights and widgets are conversation-level and travel.
     expect(db.listWorkResourcesForClone(env.user.id, branch.id)).toHaveLength(1);
     expect(db.listSessionReferences(branch.id)).toHaveLength(1);

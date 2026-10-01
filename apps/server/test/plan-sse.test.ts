@@ -247,6 +247,225 @@ describe("auto-install plan tools", () => {
   });
 });
 
+describe("chapter jump guidance", () => {
+  /**
+   * Run the full flow: make the plan, briefly teach Intro, jump to Setup and back. Returns
+   * the session and the claim the Intro jump produced.
+   */
+  async function taughtAndBack(extra: Record<string, unknown> = {}): Promise<{
+    session: Session;
+    number: string;
+    intro: PlanView["tree"][number];
+    startMessageId: string;
+    skippedMessageId: string;
+  }> {
+    const session = await planSession(extra);
+    llm.setTurns([
+      { toolCalls: [{ id: "call_plan", name: "ila_make_plan", args: { tree: TREE } }] },
+      { content: "计划已建好。" },
+    ]);
+    await chat(session.id);
+    const plan0 = (await getPlan(session.id))!;
+    const intro = plan0.tree[0]!.children![0]!;
+    const setup = plan0.tree[0]!.children![1]!;
+
+    llm.setTurns([
+      {
+        toolCalls: [
+          {
+            id: "call_start",
+            name: "ila_update_plan_progress",
+            args: { nodes: [{ id: intro.id, status: "in_progress" }] },
+          },
+        ],
+      },
+      { content: "我们开始。" },
+    ]);
+    await chat(session.id, "开始 intro");
+
+    const forward = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/plan/nodes/${setup.id}/jump`,
+    });
+    expect(forward.statusCode).toBe(200);
+    const back = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/plan/nodes/${intro.id}/jump`,
+    });
+    expect(back.statusCode).toBe(200);
+    const body = back.json<{ number: string; startMessageId: string; skippedMessageId: string }>();
+    expect(body.startMessageId).toBeTruthy();
+    expect(body.skippedMessageId).toBeTruthy();
+    return {
+      session,
+      number: body.number,
+      intro,
+      startMessageId: body.startMessageId,
+      skippedMessageId: body.skippedMessageId,
+    };
+  }
+
+  /** The system prompt of the last chat/completions request. */
+  function lastSystemPrompt(): string {
+    const request = llm.requests().at(-1)!;
+    return (request.messages as { role: string; content: string }[])[0]!.content;
+  }
+
+  it("hands the model the started chapter's stretch after jumping back", async () => {
+    const { session, number, intro, startMessageId, skippedMessageId } = await taughtAndBack();
+    const before = llm.requests().length;
+    llm.setTurns([{ content: "继续。" }]);
+
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: {
+        message: "继续 intro",
+        chapterJump: {
+          nodeId: intro.id,
+          number,
+          title: intro.title,
+          started: true,
+          startMessageId,
+          skippedMessageId,
+        },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(llm.requests().slice(before)).toHaveLength(1);
+
+    const system = lastSystemPrompt();
+    expect(system).toContain("had already started");
+    expect(system).toContain(startMessageId);
+    expect(system).toContain(skippedMessageId);
+  });
+
+  it("says a fresh chapter had not begun, without a range", async () => {
+    const session = await planSession();
+    llm.setTurns([
+      { toolCalls: [{ id: "call_plan", name: "ila_make_plan", args: { tree: TREE } }] },
+      { content: "ok" },
+    ]);
+    await chat(session.id);
+    const setup = (await getPlan(session.id))!.tree[0]!.children![1]!;
+    const jump = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/plan/nodes/${setup.id}/jump`,
+    });
+    const jumpBody = jump.json<{ number: string }>();
+    llm.setTurns([{ content: "好的。" }]);
+
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: {
+        message: "开始 setup",
+        chapterJump: {
+          nodeId: setup.id,
+          number: jumpBody.number,
+          title: setup.title,
+          started: false,
+        },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const system = lastSystemPrompt();
+    expect(system).toContain("had not begun");
+    expect(system).not.toContain('mode: "range"');
+  });
+
+  it("uses the smart-context chapter block when the session has smart context on", async () => {
+    const { session, number, intro, startMessageId, skippedMessageId } = await taughtAndBack({
+      settings: { smartContext: true },
+    });
+    llm.setTurns([{ content: "继续。" }]);
+
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: {
+        message: "继续 intro",
+        chapterJump: {
+          nodeId: intro.id,
+          number,
+          title: intro.title,
+          started: true,
+          startMessageId,
+          skippedMessageId,
+        },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const system = lastSystemPrompt();
+    expect(system).toContain("smart context");
+    expect(system).toContain('mode: "range"');
+  });
+
+  it("refuses a malformed claim", async () => {
+    const session = await planSession();
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: { message: "x", chapterJump: { nodeId: 123 } },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: { code: "INVALID_FIELD" } });
+  });
+
+  it("refuses a started flag that disagrees with the node", async () => {
+    const { session, number, intro, startMessageId, skippedMessageId } = await taughtAndBack();
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: {
+        message: "继续 intro",
+        chapterJump: {
+          nodeId: intro.id,
+          number,
+          title: intro.title,
+          started: false,
+          startMessageId,
+          skippedMessageId,
+        },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toContain("started flag");
+  });
+
+  it("refuses a claim naming a missing message", async () => {
+    const { session, number, intro } = await taughtAndBack();
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: {
+        message: "继续 intro",
+        chapterJump: {
+          nodeId: intro.id,
+          number,
+          title: intro.title,
+          started: true,
+          startMessageId: "missing-message",
+          skippedMessageId: "missing-message-2",
+        },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("adds no chapter block when the claim is absent", async () => {
+    const session = await planSession();
+    llm.setTurns([{ content: "好的。" }]);
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/chat`,
+      payload: { message: "你好" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(lastSystemPrompt()).not.toContain("jumped back to chapter");
+  });
+});
+
 describe("the create-vs-existing conflict", () => {
   /** Seed V1, then have the model ask to create another plan with no ids. */
   async function suspendedConflict(): Promise<{ session: Session; call: ToolCall }> {

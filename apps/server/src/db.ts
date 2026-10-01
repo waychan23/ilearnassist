@@ -194,11 +194,46 @@ interface PlanNodeRow {
   // Column name predates that widening; see `plans.ts`.
   done_tool_call_id: string | null;
   done_at: string | null;
+  // See `schema.ts`: the anchor's message, and the last skip's instant and message.
+  start_message_id: string | null;
+  skipped_at: string | null;
+  skipped_message_id: string | null;
 }
 
 interface PlanVersionRow {
   version: number;
   created_at: string;
+}
+
+/** One node-start position row; see `schema.ts`. */
+interface PlanNodeStartRow {
+  id: string;
+  plan_id: string;
+  node_id: string;
+  position: number;
+  message_id: string;
+  tool_call_id: string | null;
+  started_at: string;
+}
+
+export interface PlanNodeStartRecord {
+  id: string;
+  planId: string;
+  nodeId: string;
+  position: number;
+  messageId: string;
+  toolCallId: string | null;
+  startedAt: string;
+}
+
+export interface PlanNodeStartInsert {
+  id: string;
+  planId: string;
+  nodeId: string;
+  position: number;
+  messageId: string;
+  toolCallId?: string | null;
+  startedAt: string;
 }
 
 /** A plan as the server layer holds it. One per session. */
@@ -227,6 +262,9 @@ export interface PlanNodeRecord {
   removedVersion: number | null;
   anchorToolCallId: string | null;
   anchorAt: string | null;
+  startMessageId: string | null;
+  skippedAt: string | null;
+  skippedMessageId: string | null;
 }
 
 export interface PlanVersionRecord {
@@ -254,6 +292,10 @@ export interface PlanNodeInsert {
   removedVersion?: number | null;
   doneToolCallId?: string | null;
   doneAt?: string | null;
+  /** The anchor's message and the last skip's facts; NULL for a fresh node. */
+  startMessageId?: string | null;
+  skippedAt?: string | null;
+  skippedMessageId?: string | null;
 }
 
 interface ThreadRow {
@@ -1571,6 +1613,9 @@ const mapPlanNode = (r: PlanNodeRow): PlanNodeRecord => ({
   removedVersion: r.removed_version,
   anchorToolCallId: r.done_tool_call_id,
   anchorAt: r.done_at,
+  startMessageId: r.start_message_id,
+  skippedAt: r.skipped_at,
+  skippedMessageId: r.skipped_message_id,
 });
 
 const mapThread = (r: ThreadRow): ThreadRecord => ({
@@ -2683,8 +2728,46 @@ export interface AppDb {
     nodeId: string,
     status: PlanNodeStatus,
     anchorToolCallId: string | null,
-    anchorAt: string | null
+    anchorAt: string | null,
+    startMessageId?: string | null,
+    skippedAt?: string | null,
+    skippedMessageId?: string | null
   ): void;
+  /** Mark skipped without touching the anchor; record the skip instant and message. */
+  skipPlanNode(
+    planId: string,
+    nodeId: string,
+    ts: string,
+    messageId: string | null
+  ): void;
+  /** Open an existing node: skip facts cleared, anchor and start marker retained. */
+  openPlanNode(planId: string, nodeId: string): void;
+  /** Fill still-null start/skip message columns; non-null columns stay untouched. */
+  fillPlanNodeMessageIds(
+    planId: string,
+    nodeId: string,
+    startMessageId: string | null,
+    skippedMessageId: string | null
+  ): void;
+  /** Point a node's skip at this message unconditionally — post-turn resolution. */
+  setPlanNodeSkippedMessage(
+    planId: string,
+    nodeId: string,
+    messageId: string
+  ): void;
+  /** The newest live message id in a session, or null when it has none. */
+  lastSessionMessageId(sessionId: string): string | null;
+
+  /* ---------------------------- node start positions ---------------------------- */
+  /** Every node's start positions in a plan, ordered. */
+  listPlanNodeStarts(planId: string): PlanNodeStartRecord[];
+  /** Whether a start at this node/message already exists. */
+  hasPlanNodeStart(nodeId: string, messageId: string): boolean;
+  /** How many start positions a node holds. */
+  countPlanNodeStarts(nodeId: string): number;
+  insertPlanNodeStart(input: PlanNodeStartInsert): void;
+  /** Remove all of a node's starts (explicit reset). */
+  deletePlanNodeStarts(nodeId: string): void;
 
   /*
    * Quiz questions (quiz widget). Ownership is reached through the session like plans: the
@@ -3408,6 +3491,15 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
      */
     ensureColumn(db, "sessions", "active_summary_id", "active_summary_id TEXT");
     ensureColumn(db, "messages", "summary_id", "summary_id TEXT");
+
+    /*
+     * Plan nodes record the message their start anchor sits in, and each skip's instant and
+     * last message. Nullable and nothing to backfill: rows written before them resolve the
+     * start message post-turn; an unresolvable one means a queued node never began.
+     */
+    ensureColumn(db, "plan_nodes", "start_message_id", "start_message_id TEXT");
+    ensureColumn(db, "plan_nodes", "skipped_at", "skipped_at TEXT");
+    ensureColumn(db, "plan_nodes", "skipped_message_id", "skipped_message_id TEXT");
   }).immediate();
 
   const now = () => new Date().toISOString();
@@ -4484,9 +4576,10 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   const stmtInsertPlanNode = db.prepare(
     `INSERT INTO plan_nodes
        (id, plan_id, parent_id, position, title, status, introduced_version, removed_version,
-        done_tool_call_id, done_at)
+        done_tool_call_id, done_at, start_message_id, skipped_at, skipped_message_id)
      VALUES (@id, @planId, @parentId, @position, @title, @status, @introducedVersion,
-             @removedVersion, @doneToolCallId, @doneAt)`
+             @removedVersion, @doneToolCallId, @doneAt, @startMessageId, @skippedAt,
+             @skippedMessageId)`
   );
   // One statement for a fresh node and a fork's copy: the optional fields default to NULL at
   // `insertPlanNode`, because an edit's node is alive with no completion anchor, while a fork
@@ -4509,8 +4602,58 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
      WHERE id = @id AND plan_id = @planId`
   );
   const stmtUpdatePlanNodeProgress = db.prepare(
-    `UPDATE plan_nodes SET status = @status, done_tool_call_id = @doneToolCallId, done_at = @doneAt
+    `UPDATE plan_nodes
+       SET status = @status, done_tool_call_id = @doneToolCallId, done_at = @doneAt,
+           start_message_id = @startMessageId, skipped_at = @skippedAt,
+           skipped_message_id = @skippedMessageId
      WHERE id = @id AND plan_id = @planId`
+  );
+  // Skip deliberately keeps the anchor and start message: a node skipped mid-study is not the
+  // same as one never started. Only the skip facts are written.
+  const stmtSkipPlanNode = db.prepare(
+    `UPDATE plan_nodes SET status = 'skipped', skipped_at = @ts, skipped_message_id = @messageId
+     WHERE id = @id AND plan_id = @planId`
+  );
+  // Opening clears only the skip facts; the original start marker stays.
+  const stmtOpenPlanNode = db.prepare(
+    `UPDATE plan_nodes SET status = 'in_progress', skipped_at = NULL, skipped_message_id = NULL
+     WHERE id = @id AND plan_id = @planId`
+  );
+  // Fill a still-unresolved message column post-turn; a non-null column is never overwritten.
+  const stmtFillPlanNodeMessageIds = db.prepare(
+    `UPDATE plan_nodes
+       SET start_message_id = COALESCE(start_message_id, @startMessageId),
+           skipped_message_id = COALESCE(skipped_message_id, @skippedMessageId)
+     WHERE id = @id AND plan_id = @planId`
+  );
+  // Set the skip message unconditionally (a second skip lands at a new message position).
+  const stmtSetPlanNodeSkippedMessage = db.prepare(
+    `UPDATE plan_nodes SET skipped_message_id = @messageId
+     WHERE id = @id AND plan_id = @planId`
+  );
+  // The newest live message — the abandoned position a skip records.
+  const stmtLastSessionMessageId = db.prepare(
+    `SELECT id FROM messages WHERE session_id = ? AND deleted_at IS NULL
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`
+  );
+
+  /* ------------------------------ node start positions ------------------------------ */
+  const stmtListPlanNodeStarts = db.prepare(
+    `SELECT * FROM plan_node_starts WHERE plan_id = ? ORDER BY node_id, position ASC`
+  );
+  const stmtGetPlanNodeStart = db.prepare(
+    `SELECT id FROM plan_node_starts WHERE node_id = ? AND message_id = ?`
+  );
+  const stmtCountPlanNodeStarts = db.prepare(
+    `SELECT count(*) AS n FROM plan_node_starts WHERE node_id = ?`
+  );
+  const stmtInsertPlanNodeStart = db.prepare(
+    `INSERT INTO plan_node_starts
+       (id, plan_id, node_id, position, message_id, tool_call_id, started_at)
+     VALUES (@id, @planId, @nodeId, @position, @messageId, @toolCallId, @startedAt)`
+  );
+  const stmtDeletePlanNodeStarts = db.prepare(
+    `DELETE FROM plan_node_starts WHERE node_id = ?`
   );
 
   /* --------------------------------- quizzes -------------------------------- */
@@ -6060,6 +6203,9 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         removedVersion: input.removedVersion ?? null,
         doneToolCallId: input.doneToolCallId ?? null,
         doneAt: input.doneAt ?? null,
+        startMessageId: input.startMessageId ?? null,
+        skippedAt: input.skippedAt ?? null,
+        skippedMessageId: input.skippedMessageId ?? null,
       });
     },
     updatePlanNodeStructure(input) {
@@ -6074,14 +6220,73 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     softDeletePlanNode(planId, nodeId, removedVersion) {
       stmtSoftDeletePlanNode.run({ id: nodeId, planId, removedVersion });
     },
-    updatePlanNodeProgress(planId, nodeId, status, anchorToolCallId, anchorAt) {
+    updatePlanNodeProgress(
+      planId,
+      nodeId,
+      status,
+      anchorToolCallId,
+      anchorAt,
+      startMessageId = null,
+      skippedAt = null,
+      skippedMessageId = null
+    ) {
       stmtUpdatePlanNodeProgress.run({
         id: nodeId,
         planId,
         status,
         doneToolCallId: anchorToolCallId,
         doneAt: anchorAt,
+        startMessageId,
+        skippedAt,
+        skippedMessageId,
       });
+    },
+    skipPlanNode(planId, nodeId, ts, messageId) {
+      stmtSkipPlanNode.run({ id: nodeId, planId, ts, messageId });
+    },
+    openPlanNode(planId, nodeId) {
+      stmtOpenPlanNode.run({ id: nodeId, planId });
+    },
+    fillPlanNodeMessageIds(planId, nodeId, startMessageId, skippedMessageId) {
+      stmtFillPlanNodeMessageIds.run({ id: nodeId, planId, startMessageId, skippedMessageId });
+    },
+    setPlanNodeSkippedMessage(planId, nodeId, messageId) {
+      stmtSetPlanNodeSkippedMessage.run({ id: nodeId, planId, messageId });
+    },
+    lastSessionMessageId(sessionId) {
+      return (stmtLastSessionMessageId.get(sessionId) as { id: string } | undefined)?.id ?? null;
+    },
+
+    listPlanNodeStarts(planId) {
+      return (stmtListPlanNodeStarts.all(planId) as PlanNodeStartRow[]).map((r) => ({
+        id: r.id,
+        planId: r.plan_id,
+        nodeId: r.node_id,
+        position: r.position,
+        messageId: r.message_id,
+        toolCallId: r.tool_call_id,
+        startedAt: r.started_at,
+      }));
+    },
+    hasPlanNodeStart(nodeId, messageId) {
+      return stmtGetPlanNodeStart.get(nodeId, messageId) !== undefined;
+    },
+    countPlanNodeStarts(nodeId) {
+      return (stmtCountPlanNodeStarts.get(nodeId) as { n: number }).n;
+    },
+    insertPlanNodeStart(input) {
+      stmtInsertPlanNodeStart.run({
+        id: input.id,
+        planId: input.planId,
+        nodeId: input.nodeId,
+        position: input.position,
+        messageId: input.messageId,
+        toolCallId: input.toolCallId ?? null,
+        startedAt: input.startedAt,
+      });
+    },
+    deletePlanNodeStarts(nodeId) {
+      stmtDeletePlanNodeStarts.run(nodeId);
     },
 
     insertQuizQuestions(rows) {

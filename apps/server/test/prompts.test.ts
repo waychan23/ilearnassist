@@ -73,6 +73,7 @@ describe("the catalog", () => {
       "about",
       "contextSummary",
       "smartContext",
+      "chapterJump",
       "preferences",
       "clock",
       "workspace",

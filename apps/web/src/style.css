@@ -1541,7 +1541,7 @@ body {
 .plan-status-icon[data-status="in_progress"] {
   color: var(--warning);
 }
-.plan-status-icon[data-status="skipped"] {
+.plan-status-icon[data-status="skipped_started"] {
   color: var(--warning);
 }
 .plan-status-icon[data-status="deleted"] {
@@ -1567,6 +1567,52 @@ body {
 .plan-row.deleted .plan-title {
   color: var(--text-3);
   text-decoration: line-through;
+}
+
+/*
+ * Position sub-list indented under its node. The indent is on MARGIN-LEFT, so the li's
+ * border-left (the dashed rail joining the rows) itself moves right with the indentation
+ * rather than staying at the node edge; padding is only the small gap after the rail.
+ */
+.plan-position-row {
+  display: flex;
+  align-items: center;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  padding-left: var(--space-2);
+  border-left: var(--space-1) dashed var(--border);
+  margin-left: calc(var(--space-4) * (var(--plan-depth, 0) + 1) + var(--space-5));
+}
+.plan-position {
+  background: none;
+  border: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: var(--fs-2);
+}
+.plan-position:hover {
+  color: var(--accent);
+  background: var(--panel-2);
+}
+.plan-positions-toggle {
+  flex: none;
+  width: var(--space-8);
+  height: var(--space-8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  border-radius: var(--radius-sm);
+  padding: 0;
+  border: none;
+  background: none;
+}
+.plan-positions-toggle:hover {
+  color: var(--accent);
+}
+.plan-positions-toggle .icon {
+  font-size: var(--fs-2);
 }
 
 /* --------------------------------- messages --------------------------------- */

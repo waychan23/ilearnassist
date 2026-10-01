@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type {
+  ChapterJump,
   PlanNodeInput,
+  PlanNodeStart,
   PlanNodeStatus,
   PlanSnapshotNode,
   PlanStatus,
@@ -11,6 +13,7 @@ import type {
 } from "@ilearnassist/shared";
 import { planNodeNumbers } from "@ilearnassist/shared";
 import { newId, type AppDb, type PlanNodeInsert, type PlanNodeRecord, type PlanRecord } from "./db.js";
+import { renderPrompt } from "./prompts.js";
 
 /**
  * The versioned plan behind the plan widget.
@@ -310,13 +313,25 @@ function persistEffectiveStatuses(
         row.id,
         "completed",
         node.anchorToolCallId ?? (completingCallId || null),
-        node.anchorAt ?? (completingCallId ? ts : null)
+        node.anchorAt ?? (completingCallId ? ts : null),
+        row.startMessageId,
+        null,
+        null
       );
     } else {
       // in_progress, whether promoted from not-started/skipped or demoted from completed:
       // keep the row's own anchor when it has one, otherwise persist the borrowed one so the
-      // stored row answers exactly what a read derives.
-      db.updatePlanNodeProgress(planId, row.id, node.status, node.anchorToolCallId, node.anchorAt);
+      // stored row answers exactly what a read derives, and skip facts are cleared.
+      db.updatePlanNodeProgress(
+        planId,
+        row.id,
+        node.status,
+        node.anchorToolCallId,
+        node.anchorAt,
+        row.startMessageId,
+        null,
+        null
+      );
     }
   }
 }
@@ -560,29 +575,29 @@ export function applyProgress(
           "ila_update_plan_progress: nodes are deleted by editing the plan with ila_make_plan, not here"
         );
       }
-      if (change.status === "in_progress") {
+      if (change.status === "in_progress" || change.status === "completed") {
         // The start anchor: the call placed *before* the node is taught, which is the jump
-        // target a reader wants. First start wins; a repeat must not move it to a later turn.
+        // target a reader wants; first start wins. Completion keeps it, falling back to the
+        // completion call when the node finished in one step. The resolved start message is
+        // kept and filled post-turn; any old skip facts are cleared.
         db.updatePlanNodeProgress(
           plan.id,
           row.id,
-          "in_progress",
+          change.status,
           row.anchorToolCallId ?? (anchorToolCallId || null),
-          row.anchorAt ?? (anchorToolCallId ? ts : null)
+          row.anchorAt ?? (anchorToolCallId ? ts : null),
+          row.startMessageId,
+          null,
+          null
         );
-      } else if (change.status === "completed") {
-        // Keep the start anchor when one exists (the in_progress call came first). Without
-        // one — a node finished in a single call — the completion call is the only marker.
-        db.updatePlanNodeProgress(
-          plan.id,
-          row.id,
-          "completed",
-          row.anchorToolCallId ?? (anchorToolCallId || null),
-          row.anchorAt ?? (anchorToolCallId ? ts : null)
-        );
+      } else if (change.status === "skipped") {
+        // A skip preserves whatever start marker the node has — a node skipped mid-study
+        // differs from one never begun. The message position is filled post-turn.
+        db.skipPlanNode(plan.id, row.id, ts, null);
       } else {
-        // Back to not-started/skipped clears the anchor: nothing to jump to any more.
-        db.updatePlanNodeProgress(plan.id, row.id, change.status, null, null);
+        // Explicit reset to not-started clears every marker, including start positions.
+        db.updatePlanNodeProgress(plan.id, row.id, change.status, null, null, null, null, null);
+        db.deletePlanNodeStarts(row.id);
       }
     }
 
@@ -650,6 +665,10 @@ function buildCurrentTree(rows: PlanNodeRecord[]): PlanTreeNode[] {
       // its first jumpable child's marker.
       const anchor = derived?.anchorToolCallId ?? r.anchorToolCallId;
       if (anchor) node.anchorToolCallId = anchor;
+      // The skip/start message facts ride along from the row; they never derive.
+      if (r.startMessageId) node.startMessageId = r.startMessageId;
+      if (r.skippedAt) node.skippedAt = r.skippedAt;
+      if (r.skippedMessageId) node.skippedMessageId = r.skippedMessageId;
       const children = build(r.id);
       if (children.length > 0) node.children = children;
       return node;
@@ -661,11 +680,34 @@ function buildCurrentTree(rows: PlanNodeRecord[]): PlanTreeNode[] {
 export function buildPlanView(db: AppDb, plan: PlanRecord): PlanView {
   const rows = db.listPlanNodes(plan.id);
   const versions: PlanVersionSummary[] = db.listPlanVersions(plan.id);
+  const tree = buildCurrentTree(rows);
+
+  // Start positions attach per node from the position table; a node without any keeps the
+  // field absent.
+  const startsByNode = new Map<string, PlanNodeStart[]>();
+  for (const start of db.listPlanNodeStarts(plan.id)) {
+    const list = startsByNode.get(start.nodeId) ?? [];
+    list.push({
+      position: start.position,
+      messageId: start.messageId,
+      ...(start.toolCallId ? { toolCallId: start.toolCallId } : {}),
+    });
+    startsByNode.set(start.nodeId, list);
+  }
+  const attach = (nodes: PlanTreeNode[]): void => {
+    for (const node of nodes) {
+      const starts = startsByNode.get(node.id);
+      if (starts) node.starts = starts;
+      if (node.children) attach(node.children);
+    }
+  };
+  attach(tree);
+
   return {
     planId: plan.id,
     version: plan.version,
     status: plan.status,
-    tree: buildCurrentTree(rows),
+    tree,
     versions,
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt,
@@ -679,6 +721,12 @@ export interface PlanJumpResult {
   title: string;
   /** How many not-yet-done nodes were marked skipped to get there. */
   skippedCount: number;
+  /** The target had actually started before (a skipped node with a start marker). */
+  started: boolean;
+  /** The target's start message, when one was resolved. */
+  startMessageId: string | null;
+  /** The skip position the target sat at before being opened. */
+  skippedMessageId: string | null;
 }
 
 /**
@@ -720,6 +768,14 @@ export function jumpToNode(db: AppDb, sessionId: string, nodeId: string): PlanJu
     throw new Error("that node is already completed");
   }
 
+  // Target facts captured from the pre-jump tree; opening below clears its skip columns.
+  const targetStarted = !!target.anchorToolCallId;
+  const targetStartMessageId = target.startMessageId ?? null;
+  const targetSkippedMessageId = target.skippedMessageId ?? null;
+  // The abandoned position every newly skipped node records (null when the session has no
+  // messages yet — the first turn resolves it post-turn).
+  const lastMessageId = db.lastSessionMessageId(sessionId);
+
   const targetIndex = live.indexOf(target);
   const ancestors = new Set<string>();
   const collectAncestors = (
@@ -751,14 +807,14 @@ export function jumpToNode(db: AppDb, sessionId: string, nodeId: string): PlanJu
 
   const ts = new Date().toISOString();
   const writes = (): void => {
-    // Jumped-past chapters keep no start anchor; they are not what the reader would open.
+    // Skip facts only: an in-progress node keeps its start marker, an unstarted one has none.
     for (const id of skippedIds) {
-      db.updatePlanNodeProgress(plan.id, id, "skipped", null, null);
+      db.skipPlanNode(plan.id, id, ts, lastMessageId);
     }
-    // The target's own teaching starts in the turn that follows. It is opened here without a
-    // jump anchor — the model marks it in_progress at the node start per its prompt contract.
+    // The target is opened without clearing any start marker it had; its teaching continues
+    // in the turn that follows. Ancestors are opened the same way.
     for (const id of openedIds) {
-      db.updatePlanNodeProgress(plan.id, id, "in_progress", null, null);
+      db.openPlanNode(plan.id, id);
     }
     // A jump only skips and opens nodes, but the reconciliation still runs: an opened child
     // under a completed container reopens it, which is the legacy state the rollup must not
@@ -775,7 +831,164 @@ export function jumpToNode(db: AppDb, sessionId: string, nodeId: string): PlanJu
     number: numbers.get(nodeId) ?? "",
     title: target.title,
     skippedCount: skippedIds.length,
+    started: targetStarted,
+    startMessageId: targetStartMessageId,
+    skippedMessageId: targetSkippedMessageId,
   };
+}
+
+export interface PlanMessageResolution {
+  /** Nodes whose start message was resolved this call. */
+  starts: number;
+  /** Nodes whose skip position was set to the just-finished turn's message. */
+  skips: number;
+}
+
+/**
+ * Record one start position of a node: where teaching began or resumed.
+ *
+ * Idempotent per (node, message) — the same assistant message may be discovered both as the
+ * anchor's message and as a chapter-jump turn. The ordinal is per node in recorded order,
+ * which is the "位置 N" the panel lists.
+ */
+export function recordNodeStart(
+  db: AppDb,
+  planId: string,
+  nodeId: string,
+  position: { messageId: string; toolCallId?: string | null }
+): void {
+  if (db.hasPlanNodeStart(nodeId, position.messageId)) return;
+  db.insertPlanNodeStart({
+    id: newId(),
+    planId,
+    nodeId,
+    position: db.countPlanNodeStarts(nodeId) + 1,
+    messageId: position.messageId,
+    toolCallId: position.toolCallId ?? null,
+    startedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Resolve the message columns of a session's plan nodes.
+ *
+ * Anchors are tool-call ids, so the start message resolves by mapping every live message's
+ * tool calls to that message and filling each node whose anchor never resolved. Called after
+ * every finished turn: a node marked `in_progress` in that turn gains its message, and a skip
+ * the turn's progress tool made lands on the turn's assistant message (`turn.sinceIso` bounds
+ * which skips that can be — jump skips already carry their position and an earlier instant).
+ */
+export function resolvePlanStartMessages(
+  db: AppDb,
+  userId: string,
+  sessionId: string,
+  turn?: { assistantMessageId: string; sinceIso: string }
+): PlanMessageResolution {
+  const planRow = db.getPlanBySession(sessionId);
+  if (!planRow) return { starts: 0, skips: 0 };
+
+  // Tool-call id → the message it sits in, over every live message.
+  const anchorMessages = new Map<string, string>();
+  for (const message of db.listMessagesForUser(sessionId, userId)) {
+    for (const call of message.toolCalls ?? []) {
+      anchorMessages.set(call.id, message.id);
+    }
+  }
+
+  let starts = 0;
+  let skips = 0;
+  for (const node of db.listPlanNodes(planRow.id)) {
+    if (node.anchorToolCallId && !node.startMessageId) {
+      const messageId = anchorMessages.get(node.anchorToolCallId);
+      if (messageId) {
+        db.fillPlanNodeMessageIds(planRow.id, node.id, messageId, null);
+        recordNodeStart(db, planRow.id, node.id, {
+          messageId,
+          toolCallId: node.anchorToolCallId,
+        });
+        starts += 1;
+      }
+    }
+    if (
+      turn &&
+      node.status === "skipped" &&
+      node.skippedAt &&
+      node.skippedAt >= turn.sinceIso
+    ) {
+      db.setPlanNodeSkippedMessage(planRow.id, node.id, turn.assistantMessageId);
+      skips += 1;
+    }
+  }
+  return { starts, skips };
+}
+
+const chapterJumpInputSchema = z.object({
+  nodeId: z.string().min(1).max(100),
+  number: z.string().min(1).max(40),
+  title: z.string().min(1).max(PLAN_TITLE_MAX),
+  started: z.boolean(),
+  startMessageId: z.string().max(64).optional(),
+  skippedMessageId: z.string().max(64).optional(),
+});
+
+/** Parse an optional chapter-jump field: undefined absent, null malformed. */
+export function parseChapterJump(raw: unknown): ChapterJump | null | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const result = chapterJumpInputSchema.safeParse(raw);
+  return result.success ? (result.data as ChapterJump) : null;
+}
+
+/**
+ * Validate a chapter-jump claim the client sent, before it reaches a prompt.
+ *
+ * The jump just opened the node, so the row is live and its anchor presence says whether it
+ * had started — the client's flag must agree. Any message ids must be live messages of this
+ * session. The claim is input from outside like every other body field, which is why it is
+ * verified rather than rendered straight into the system prompt.
+ */
+export function assertValidChapterJump(
+  db: AppDb,
+  userId: string,
+  sessionId: string,
+  jump: ChapterJump
+): void {
+  const plan = db.getPlanBySession(sessionId);
+  if (!plan) throw new Error("chapterJump: this conversation has no plan");
+  const node = db.listPlanNodes(plan.id).find((n) => n.id === jump.nodeId);
+  if (!node || node.removedVersion !== null) {
+    throw new Error(`chapterJump: node ${jump.nodeId} is not a live node in this plan`);
+  }
+  if (jump.started !== !!node.anchorToolCallId) {
+    throw new Error("chapterJump: the started flag does not agree with the node's state");
+  }
+  const messageIds = new Set(db.listMessagesForUser(sessionId, userId).map((m) => m.id));
+  for (const id of [jump.startMessageId, jump.skippedMessageId]) {
+    if (id !== undefined && !messageIds.has(id)) {
+      throw new Error(`chapterJump: no live message with id ${id} in this conversation`);
+    }
+  }
+}
+
+/**
+ * The prompt block for the turn that follows a chapter jump.
+ *
+ * The key selects two axes: smart context on/off and whether teaching the target had begun.
+ * The caller decides both — the chat route knows the session setting and the jump result —
+ * so this only renders, and a tuned deployment can rewrite any of the four blocks.
+ */
+export function renderChapterJumpGuidance(jump: ChapterJump, smartContext: boolean): string {
+  const prefix = smartContext
+    ? "chat.guidance.chapterJump.smart"
+    : "chat.guidance.chapterJump.default";
+  if (!jump.started) {
+    return renderPrompt(`${prefix}.fresh`, { number: jump.number, title: jump.title });
+  }
+  return renderPrompt(prefix, {
+    number: jump.number,
+    title: jump.title,
+    startMessageId: jump.startMessageId ?? "",
+    skippedMessageId: jump.skippedMessageId ?? "",
+  });
 }
 
 /** One historical version, structure only. `undefined` when the version never existed. */

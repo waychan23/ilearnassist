@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "./fixtures";
-import { scriptLlm } from "./llm";
+import { FAKE_LLM, scriptLlm } from "./llm";
 import { enterWorkspace } from "./workspaces";
 
 /**
@@ -452,8 +452,146 @@ test.describe("the plan widget", () => {
       "data-node-status",
       "not_started"
     );
-    // Skipped nodes stay playable so a learner can come back to them.
+    // Skipped nodes stay playable so a learner can come back to them. A never-started skip
+    // carries no state marker of its own.
     await expect(page.getByTestId(`plan-play-${intro}`)).toBeVisible();
+    await expect(
+      page.locator(`[data-testid="plan-node-${intro}"] .plan-status-icon`)
+    ).toHaveCount(0);
+  });
+
+  test("a paused, half-studied skipped node shows a pause icon and continues instead of restarting", async ({
+    page,
+    request,
+  }) => {
+    const name = unique("Plan skip return");
+    await planSession(page, name);
+
+    await scriptLlm(request as APIRequestContext, { turns: makeTurn("call_make", TREE) });
+    await send(page, "制定学习计划");
+    await expect(page.locator('[data-testid^="plan-node-"]')).toHaveCount(4);
+
+    const intro = await idOf(page, "1.1 Intro");
+    const setup = await idOf(page, "1.2 Setup");
+
+    // Teach intro briefly: the bookkeeping call first, then content.
+    await scriptLlm(request as APIRequestContext, {
+      turns: [
+        {
+          toolCalls: [
+            {
+              id: "call_intro",
+              name: "ila_update_plan_progress",
+              args: { nodes: [{ id: intro, status: "in_progress" }] },
+            },
+          ],
+        },
+        { content: "我们先学 Intro 的要点。" },
+      ],
+    });
+    await send(page, "开始 intro");
+    await expect(page.getByTestId(`plan-node-${intro}`)).toHaveAttribute(
+      "data-node-status",
+      "in_progress"
+    );
+
+    // Jump forward to setup: intro is skipped but keeps its prior progress.
+    await scriptLlm(request as APIRequestContext, { turns: [{ content: "我们开始学 Setup。" }] });
+    await page.getByTestId(`plan-play-${setup}`).click();
+    await page.getByTestId("confirm-accept").click();
+    await expect(page.getByTestId("message-assistant").last()).toContainText("我们开始学 Setup");
+
+    // Distinct icon marker, and the distinct tooltip label — unlike a never-started skip.
+    const introIcon = page.locator(
+      `[data-testid="plan-node-${intro}"] .plan-status-icon`
+    );
+    await expect(introIcon).toHaveAttribute("data-status", "skipped_started");
+    await expect(introIcon).toHaveAttribute("title", "已跳过（学过一部分）");
+
+    // Jump back: the confirm names the continue-not-restart behavior.
+    await scriptLlm(request as APIRequestContext, {
+      turns: [{ content: "好的，我们继续学 Intro，不从头重来。" }],
+    });
+    await page.getByTestId(`plan-play-${intro}`).click();
+    await expect(page.locator(".modal, [role='dialog']").first()).toContainText("已学习一部分");
+    await page.getByTestId("confirm-accept").click();
+
+    await expect(page.getByTestId("message-assistant").last()).toContainText("继续学 Intro");
+    await expect(page.getByTestId(`plan-node-${intro}`)).toHaveAttribute(
+      "data-node-status",
+      "in_progress"
+    );
+
+    // The model was told the chapter had started, with ids to read the earlier stretch.
+    const requests = (await request
+      .get(`${FAKE_LLM}/__requests`)
+      .then((r) => r.json())) as {
+      stream?: boolean;
+      messages: { role: string; content: string }[];
+    }[];
+    const streamed = requests.filter((r) => r.stream === true);
+    expect(streamed.length).toBeGreaterThan(0);
+    const system = streamed[0]!.messages[0]!;
+    expect(system.role).toBe("system");
+    expect(system.content).toContain("had already started");
+
+    // Intro now holds two start positions. The control defaults to expanded and sits in
+    // the sub-list right after position 1 (not beside the node title).
+    const toggle = page.getByTestId(`plan-positions-toggle-${intro}`);
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(toggle).toHaveAttribute("title", "多次学习该章节，有多个消息位置，点击折叠");
+
+    // Default expanded: both positions listed, 位置1 (with the control on the same row)
+    // and 位置2 on its own row.
+    let positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
+    await expect(positionRows).toHaveCount(2);
+    await expect(page.getByTestId(`plan-position-${intro}-1`)).toContainText("位置1");
+    await expect(page.getByTestId(`plan-position-${intro}-2`)).toContainText("位置2");
+
+    // The control shares the row with position 1 — not a row of its own.
+    const sameRow = await toggle.evaluate((el, firstId) => {
+      const li = el.closest("li");
+      return li?.querySelector(`[data-testid="plan-position-${firstId}-1"]`) !== null;
+    }, intro);
+    expect(sameRow).toBe(true);
+
+    // The dashed rail (the li's border-left) itself is indented past the node title.
+    const railOffset = await page
+      .locator(`[data-testid="plan-position-${intro}-1"]`)
+      .evaluate((el) => {
+        const positionLi = el.closest("li")!;
+        const nodeLi = positionLi.previousElementSibling as HTMLElement | null;
+        const railX = positionLi.getBoundingClientRect().left;
+        const nodeX = nodeLi?.getBoundingClientRect().left ?? railX;
+        return { railX, nodeX };
+      });
+    expect(railOffset.railX).toBeGreaterThan(railOffset.nodeX + 8);
+
+    // Click position 2 first (while expanded): the chat scrolls to that resume message.
+    const resumeMessage = page.getByTestId("message-assistant").last();
+    await page.getByTestId(`plan-position-${intro}-2`).click();
+    const inView = await resumeMessage.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.top >= 0 && rect.bottom <= window.innerHeight;
+    });
+    expect(inView).toBe(true);
+
+    // Collapse: position 2 hides, the control flips with its tooltip; position 1 stays.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle).toHaveAttribute("title", "多次学习该章节，有多个消息位置，点击展开");
+    await expect(page.getByTestId(`plan-position-${intro}-2`)).toHaveCount(0);
+    positionRows = page.locator(`[data-testid^="plan-position-${intro}-"]`);
+    await expect(positionRows).toHaveCount(1);
+    await expect(page.getByTestId(`plan-position-${intro}-1`)).toBeVisible();
+
+    // Expand again: position 2 returns.
+    await toggle.click();
+    await expect(page.getByTestId(`plan-position-${intro}-2`)).toBeVisible();
+
+    // A single-position node (setup) carries no control.
+    await expect(page.getByTestId(`plan-positions-toggle-${setup}`)).toHaveCount(0);
   });
 
   test("the footer composer sends an adjustment as a normal user message", async ({

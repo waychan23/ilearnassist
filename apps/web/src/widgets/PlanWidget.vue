@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "../api/client";
 import type {
+  PlanNodeStart,
   PlanNodeStatus,
   PlanSnapshot,
   PlanSnapshotNode,
@@ -35,6 +36,16 @@ const historyFailed = ref(false);
 const selectedVersion = ref<number | "latest">("latest");
 /** Explicitly collapsed branch ids; everything starts expanded. */
 const collapsed = ref<Set<string>>(new Set());
+/** Collapsed position sub-lists: the set names nodes the user folded. Default expanded. */
+const collapsedPositions = ref<Set<string>>(new Set());
+
+function togglePositions(nodeId: string): void {
+  const next = new Set(collapsedPositions.value);
+  if (next.has(nodeId)) next.delete(nodeId);
+  else next.add(nodeId);
+  collapsedPositions.value = next;
+}
+
 /** Footer composer state. Declared before `resetView`/the immediate watch below use them. */
 const adjusting = ref(false);
 const adjustText = ref("");
@@ -65,6 +76,7 @@ function resetView(): void {
   historyFailed.value = false;
   selectedVersion.value = "latest";
   collapsed.value = new Set();
+  collapsedPositions.value = new Set();
   adjusting.value = false;
   adjustText.value = "";
 }
@@ -139,7 +151,8 @@ async function chooseVersion(value: string): Promise<void> {
 
 /* ---------------------------------- tree UI ---------------------------------- */
 
-interface Row {
+interface NodeRow {
+  kind: "node";
   id: string;
   number: string;
   title: string;
@@ -147,9 +160,28 @@ interface Row {
   hasChildren: boolean;
   status?: PlanNodeStatus;
   anchorToolCallId?: string;
+  /** Every start position; multi-position nodes get the position sub-list. */
+  starts?: PlanNodeStart[];
+  multi: boolean;
+  /** A skipped row had a start marker: studied in part before being skipped. */
+  started?: boolean;
   /** Play affordance: chapters that can be jumped to (not started yet, or skipped). */
   playable: boolean;
 }
+
+interface PositionRow {
+  kind: "position";
+  id: string;
+  nodeId: string;
+  depth: number;
+  position: number;
+  messageId: string;
+  toolCallId?: string;
+  /** Present on position 1 of a multi node: the expand/collapse control on the same row. */
+  toggle?: { expanded: boolean; count: number };
+}
+
+type Row = NodeRow | PositionRow;
 
 type DisplayNode = PlanTreeNode | PlanSnapshotNode;
 
@@ -161,24 +193,58 @@ const rows = computed<Row[]>(() => {
   const roots = (snapshot.value?.tree ?? plan.value?.tree ?? []) as DisplayNode[];
   const numbers = planNodeNumbers(roots);
   const out: Row[] = [];
+
+  /**
+   * Position rows for one multi node. Position 1 always and carries the expand/collapse
+   * control on the same row; the rest follow only when expanded.
+   */
+  const positionRows = (node: PlanTreeNode, depth: number): Row[] => {
+    const starts = node.starts ?? [];
+    const expanded = !collapsedPositions.value.has(node.id);
+    const toPosition = (start: PlanNodeStart, withToggle: boolean): PositionRow => ({
+      kind: "position",
+      id: `${node.id}:${start.position}`,
+      nodeId: node.id,
+      depth,
+      position: start.position,
+      messageId: start.messageId,
+      ...(start.toolCallId ? { toolCallId: start.toolCallId } : {}),
+      ...(withToggle ? { toggle: { expanded, count: starts.length } } : {}),
+    });
+
+    const [first, ...others] = starts;
+    if (!first) return [];
+    return [
+      toPosition(first, true),
+      ...(expanded ? others.map((start) => toPosition(start, false)) : []),
+    ];
+  };
+
   const walk = (nodes: DisplayNode[], depth: number): void => {
     for (const node of nodes) {
       const children = node.children ?? [];
-      const row: Row = {
+      const row: NodeRow = {
+        kind: "node",
         id: node.id,
         number: numbers.get(node.id) ?? "",
         title: node.title,
         depth,
         hasChildren: children.length > 0,
+        multi: false,
         playable: false,
       };
       if (isLive(node)) {
         row.status = node.status;
         row.anchorToolCallId = node.anchorToolCallId;
+        row.starts = node.starts;
+        row.multi = (node.starts?.length ?? 0) > 1;
         row.playable =
           !historyMode.value && (node.status === "not_started" || node.status === "skipped");
+        if (node.status === "skipped" && node.anchorToolCallId) row.started = true;
       }
       out.push(row);
+      // The position sub-list hugs the title, before any tree children.
+      if (isLive(node) && row.multi) out.push(...positionRows(node, depth + 1));
       if (!collapsed.value.has(node.id)) walk(children, depth + 1);
     }
   };
@@ -269,7 +335,7 @@ const currentPathDisabled = computed(() => historyMode.value || !plan.value);
 
 /* --------------------------------- status UI --------------------------------- */
 
-function statusLabel(status: PlanNodeStatus): string {
+function statusLabel(status: PlanNodeStatus, row?: NodeRow): string {
   switch (status) {
     case "not_started":
       return t("plan.status.not_started");
@@ -278,7 +344,10 @@ function statusLabel(status: PlanNodeStatus): string {
     case "completed":
       return t("plan.status.completed");
     case "skipped":
-      return t("plan.status.skipped");
+      // Distinct wording for a skipped node that had been in progress.
+      return row?.anchorToolCallId
+        ? t("plan.status.skippedStarted")
+        : t("plan.status.skipped");
     case "deleted":
       return t("plan.status.deleted");
   }
@@ -291,10 +360,31 @@ function planStatusLabel(): string {
   return t("plan.status.not_started");
 }
 
-/** Scroll the chat to the node's start marker (the progress call before its content). */
-function jumpToStart(row: Row): void {
-  if (!row.anchorToolCallId || historyMode.value) return;
-  emitWidgetEvent({ type: "chat.jump", toolCallId: row.anchorToolCallId });
+/**
+ * Scroll the chat to where the node's teaching first began. The start marker (a progress
+ * call) is precise; without one the first recorded position is an ordinary message.
+ */
+function jumpToStart(row: NodeRow): void {
+  if (historyMode.value) return;
+  if (row.anchorToolCallId) {
+    emitWidgetEvent({ type: "chat.jump", toolCallId: row.anchorToolCallId });
+  } else if (row.starts?.length) {
+    emitWidgetEvent({ type: "chat.jumpToMessage", messageId: row.starts[0]!.messageId });
+  }
+}
+
+/** Tooltip for the position control; literal keys the catalog guard can find. */
+function positionsToggleTitle(toggle: { expanded: boolean }): string {
+  return toggle.expanded ? t("plan.positionsHideHint") : t("plan.positionsShowHint");
+}
+
+/** Jump to one position in a node's position sub-list. */
+function jumpToPosition(row: PositionRow): void {
+  if (row.toolCallId) {
+    emitWidgetEvent({ type: "chat.jump", toolCallId: row.toolCallId });
+  } else {
+    emitWidgetEvent({ type: "chat.jumpToMessage", messageId: row.messageId });
+  }
 }
 
 /**
@@ -303,13 +393,13 @@ function jumpToStart(row: Row): void {
  * model to start teaching. Confirmed, because it silently rewrites progress.
  */
 const jumping = ref(false);
-async function jumpToChapter(row: Row): Promise<void> {
+async function jumpToChapter(row: NodeRow): Promise<void> {
   const sessionId = store.activeSessionId;
   if (!sessionId || jumping.value || store.streaming.active) return;
 
   const ok = await confirm({
     message: t("plan.jumpConfirm", { number: row.number, title: row.title }),
-    detail: t("plan.jumpConfirmDetail"),
+    detail: t("plan.jumpConfirmDetail") + (row.started ? `\n${t("plan.jumpConfirmRestartHint")}` : ""),
     confirmText: t("plan.jumpConfirmOk"),
   });
   if (!ok) return;
@@ -320,7 +410,22 @@ async function jumpToChapter(row: Row): Promise<void> {
     // Refresh immediately; the message below then takes the model into the chapter.
     plan.value = res.plan;
     const message = t("plan.jumpMessage", { number: res.number, title: res.title });
-    await store.sendPanelMessage(message);
+    // Tell the model this follows a jump and whether the chapter had started, so it can
+    // recover the earlier stretch instead of restarting.
+    await store.sendPanelMessage(message, {
+      chapterJump: {
+        nodeId: row.id,
+        number: res.number,
+        title: res.title,
+        started: res.started,
+        ...(res.started
+          ? {
+              startMessageId: res.startMessageId ?? undefined,
+              skippedMessageId: res.skippedMessageId ?? undefined,
+            }
+          : {}),
+      },
+    });
   } catch {
     // A stale node (edited away between render and click): the next turn.finished refetch
     // removes it; leave the panel as-is rather than toast inside it.
@@ -435,9 +540,37 @@ async function submitAdjust(): Promise<void> {
           </div>
 
           <ul class="plan-tree" data-testid="plan-tree">
+            <template v-for="row in rows" :key="row.id">
+            <!-- One position in a node's position sub-list. -->
             <li
-              v-for="row in rows"
-              :key="row.id"
+              v-if="row.kind === 'position'"
+              class="plan-position-row"
+              :style="{ '--plan-depth': row.depth - 1 }"
+            >
+              <button
+                class="plan-position"
+                :title="t('plan.jumpToPosition')"
+                :data-testid="`plan-position-${row.nodeId}-${row.position}`"
+                @click="jumpToPosition(row)"
+              >
+                <span class="plan-position-label">{{ t("plan.positionN", { n: row.position }) }}</span>
+              </button>
+
+              <!-- Expand/collapse control on the SAME row as position 1. -->
+              <button
+                v-if="row.toggle"
+                class="plan-positions-toggle"
+                :title="positionsToggleTitle(row.toggle)"
+                :data-testid="'plan-positions-toggle-' + row.nodeId"
+                :aria-expanded="row.toggle.expanded"
+                @click="togglePositions(row.nodeId)"
+              >
+                <Icon :name="row.toggle.expanded ? 'caret-up' : 'caret-down'" />
+              </button>
+            </li>
+
+            <li
+              v-else
               class="plan-row"
               :class="{ deleted: row.status === 'deleted' }"
               :data-testid="'plan-node-' + row.id"
@@ -454,6 +587,24 @@ async function submitAdjust(): Promise<void> {
                 <Icon :name="collapsed.has(row.id) ? 'caret-right' : 'caret-down'" />
               </button>
               <span v-else class="plan-caret-spacer" aria-hidden="true" />
+
+              <!--
+                Only a skipped row that had started carries a marker (pause icon) beside play.
+                A never-started skip shows no icon, like an unstarted node; non-playable rows
+                show their own status icon.
+              -->
+              <span
+                v-if="
+                  row.playable &&
+                  row.status === 'skipped' &&
+                  row.anchorToolCallId
+                "
+                class="plan-status-icon"
+                data-status="skipped_started"
+                :title="statusLabel(row.status, row)"
+              >
+                <Icon name="pause" />
+              </span>
 
               <!--
                 Play on undone/skipped nodes: jump study there (a confirm, a server-side
@@ -474,15 +625,14 @@ async function submitAdjust(): Promise<void> {
                 <template v-if="!historyMode">
                   <Icon v-if="row.status === 'completed'" name="check" />
                   <Icon v-else-if="row.status === 'in_progress'" name="progress" />
-                  <Icon v-else-if="row.status === 'skipped'" name="skip" />
                   <Icon v-else-if="row.status === 'deleted'" name="close" />
                   <Icon v-else name="circle" />
                 </template>
               </span>
 
-              <!-- Started or finished nodes jump back to the node's start marker. -->
+              <!-- Started or finished nodes jump back to the node's first start position. -->
               <button
-                v-if="row.anchorToolCallId && !historyMode"
+                v-if="(row.anchorToolCallId || row.starts?.length) && !historyMode"
                 class="plan-title plan-link"
                 :title="
                   row.status === 'completed'
@@ -497,11 +647,12 @@ async function submitAdjust(): Promise<void> {
               <span
                 v-else
                 class="plan-title"
-                :title="row.status ? statusLabel(row.status) : undefined"
+                :title="row.status ? statusLabel(row.status, row) : undefined"
               >
                 <span class="plan-no">{{ row.number }}</span>{{ row.title }}
               </span>
             </li>
+            </template>
           </ul>
         </template>
 

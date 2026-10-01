@@ -82,7 +82,14 @@ export const RECALL_TOOL_NAME = "ila_recall";
  * text, newest first. Both page with `offset` — back in time for `recent`, through the hits
  * for `search`.
  */
-export const RECALL_MODES = ["recent", "search"] as const;
+/**
+ * `ila_recall` modes:
+ * - `recent` — newest messages, `offset` pages back.
+ * - `search` — messages containing `query`.
+ * - `around` — one message plus the `before`/`after` messages around it.
+ * - `range` — two messages and everything between them.
+ */
+export const RECALL_MODES = ["recent", "search", "around", "range"] as const;
 
 export type RecallMode = (typeof RECALL_MODES)[number];
 
@@ -1217,10 +1224,35 @@ export interface PlanTreeNode extends PlanSnapshotNode {
    * `ila_update_plan_progress` call that first put it `in_progress` (placed before the
    * teaching content, so a click jumps to the node's start), falling back to the call that
    * completed it when a model finished a node without a separate start call. Cleared when
-   * the node returns to not-started/skipped.
+   * the node returns to not-started; deliberately **kept** when the node is skipped, since
+   * a skipped node may have been in progress.
    */
   anchorToolCallId?: string;
+  /**
+   * The message the node's first start marker sits in (or its sole completion marker).
+   * Null when the node was queued by a jump but teaching never began. Its presence is what
+   * distinguishes a skipped node that had been in progress.
+   */
+  startMessageId?: string;
+  /** When the node was last skipped. */
+  skippedAt?: string;
+  /** The last live message at the moment of the skip — the abandoned position. */
+  skippedMessageId?: string;
+  /**
+   * Every message position where teaching of this node began or resumed, in order. Absent
+   * when teaching never started. A node taught, skipped and returned holds several — the
+   * panel renders them as a position picker.
+   */
+  starts?: PlanNodeStart[];
   children?: PlanTreeNode[];
+}
+
+/** One position where a plan node's teaching started/resumed. */
+export interface PlanNodeStart {
+  position: number;
+  messageId: string;
+  /** The in_progress progress call when the position came from one. */
+  toolCallId?: string;
 }
 
 /** Anything carrying an id/children tree, which is both snapshot and current nodes. */
@@ -4486,6 +4518,24 @@ export interface TurnRequestMeta {
   timezone?: string;
 }
 
+/**
+ * Context carried with the user message immediately after a chapter jump
+ * (`POST …/plan/nodes/:id/jump`). It tells the model which chapter it is being asked to
+ * (re)enter, and whether teaching had previously begun there, so it can recover the earlier
+ * stretch with `ila_recall` instead of restarting or guessing.
+ */
+export interface ChapterJump {
+  nodeId: string;
+  /** The node's hierarchical number, e.g. "2.1". */
+  number: string;
+  title: string;
+  /** Teaching had actually started before (a skipped node with a start marker). */
+  started: boolean;
+  /** Present when `started` and the positions resolved; message ids in this conversation. */
+  startMessageId?: string;
+  skippedMessageId?: string;
+}
+
 export interface ChatInput extends TurnRequestMeta {
   message: string;
   provider?: string;
@@ -4510,6 +4560,8 @@ export interface ChatInput extends TurnRequestMeta {
    * diagram*, and the agent is told which one so it can look it up — see `TurnReference`.
    */
   refs?: TurnReference[];
+  /** Present on the user turn that immediately follows a chapter jump. */
+  chapterJump?: ChapterJump;
 }
 
 /* ---------------------------------- Chat stream events -------------------------------- */

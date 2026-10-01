@@ -65,6 +65,7 @@ export const ICON_PATHS = {
   edit: ["M11.25 2.75L13.25 4.75L5.75 12.25L2.75 13.25L3.75 10.25Z", "M10.25 3.75L12.25 5.75"],
 
   "caret-down": ["M4 6.5L8 10.5L12 6.5"],
+  "caret-up": ["M4 9.5L8 5.5L12 9.5"],
   "caret-right": ["M6.5 4L10.5 8L6.5 12"],
   "caret-left": ["M9.5 4L5.5 8L9.5 12"],
 
@@ -316,7 +317,12 @@ export const ICON_PATHS = {
     "M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 1 1 11 0",
     "M8 5.5V8l2.2 1.4",
   ],
+  /* Fast-forward: a quiz question skipped/dismissed (QuizWidget). Plan nodes no longer
+     use it — see pause. */
   skip: ["M4.5 4.5L9 8L4.5 11.5", "M10 4.5L14 8L10 11.5", "M12 4.5V11.5"],
+  /* Paused partway: two rounded bars — a chapter taught in part before the learner jumped
+     away. A never-started plan skip shows no icon at all. */
+  pause: ["M6.25 4.5V11.5", "M9.75 4.5V11.5"],
   history: [
     "M3 8a5.5 5.5 0 1 1 1.6 3.9",
     "M3 4.5V8h3.5",
