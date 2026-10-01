@@ -45,8 +45,14 @@ test("the account's usage page reports the spend its own turns made", async ({ p
 
   // The totals arrive from the ledger, so a turn taken a moment ago is already in them.
   await expect(page.getByTestId("stats-totals")).toBeVisible();
-  await expect(page.getByTestId("stats-tile-calls")).not.toContainText("0");
-  await expect(page.getByTestId("stats-tile-input")).not.toContainText("^0$");
+  // Scoped to the value (the label carries no digits), and matched exactly: under a full
+  // run the count is something like 405, which a plain toContainText("0") matched.
+  await expect(
+    page.getByTestId("stats-tile-calls").locator(".tile-value")
+  ).not.toHaveText(/^0$/);
+  await expect(
+    page.getByTestId("stats-tile-input").locator(".tile-value")
+  ).not.toHaveText(/^0$/);
 
   // Counting began, said out loud: the ledger is forward-only and a page that did not say so
   // would read as a claim about all of history.
@@ -127,7 +133,9 @@ test("the date range narrows what the page reports", async ({ page, request }) =
   await spend(page, request, "范围之内");
 
   await openUsage(page);
-  await expect(page.getByTestId("stats-tile-calls")).not.toContainText("0");
+  await expect(
+    page.getByTestId("stats-tile-calls").locator(".tile-value")
+  ).not.toHaveText(/^0$/);
 
   // A range in the past holds nothing, and the page says which nothing it is: "this range is
   // empty" rather than "nothing has ever been counted", which have different remedies.
@@ -137,7 +145,9 @@ test("the date range narrows what the page reports", async ({ page, request }) =
 
   // The preset puts it back, and the spend returns with it.
   await page.getByTestId("stats-preset-all").click();
-  await expect(page.getByTestId("stats-tile-calls")).not.toContainText("0");
+  await expect(
+    page.getByTestId("stats-tile-calls").locator(".tile-value")
+  ).not.toHaveText(/^0$/);
 });
 
 test("each reply says which model wrote it", async ({ page, request }) => {
