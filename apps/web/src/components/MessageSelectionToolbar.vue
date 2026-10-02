@@ -73,7 +73,6 @@ const position = computed(() =>
       :style="{
         left: `${position.left}px`,
         top: `${position.top}px`,
-        width: `${size.width}px`,
         height: `${size.height}px`,
       }"
       @mousedown.prevent
@@ -133,9 +132,6 @@ const position = computed(() =>
   font-size: var(--fs-2);
   cursor: pointer;
   transition: background var(--dur-fast), color var(--dur-fast);
-  /* A label longer than the button's derived width is clipped rather than widening the strip,
-     which would put the bar off the edge it just computed its way inside of. */
-  overflow: hidden;
   white-space: nowrap;
 }
 .note-toolbar-btn span {
