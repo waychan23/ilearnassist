@@ -6,6 +6,7 @@ import { useAppStore } from "../../stores/app";
 import { widgetLabel } from "../../widgets/registry";
 import GenerationParams from "../GenerationParams.vue";
 import Icon from "../Icon.vue";
+import ToolChecklist from "../ToolChecklist.vue";
 
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
@@ -53,6 +54,15 @@ const sessionWidgets = widgetsForScope("session");
  */
 const widgets = ref<WidgetId[]>(defaultWidgetIdsForScope("session"));
 
+/**
+ * The tool allow-list, seeded from the chosen Copilot exactly like widgets and tickable here:
+ * this is the override the request carries, so choosing a Copilot is a starting point rather
+ * than a constraint. No Copilot means every tool — the default a Copilotless conversation
+ * always got.
+ */
+const allTools = ref(true);
+const tools = ref<string[]>([]);
+
 function toggleWidget(id: WidgetId) {
   const i = widgets.value.indexOf(id);
   if (i === -1) widgets.value.push(id);
@@ -72,6 +82,8 @@ watch(
   (id) => {
     const copilot = id ? store.copilots.find((c) => c.id === id) : undefined;
     params.value?.load(copilot?.settings ?? {});
+    allTools.value = copilot?.allTools ?? true;
+    tools.value = copilot ? [...copilot.tools] : [];
     /*
      * The defaults rather than `[]`, and the distinction is the whole point of them: no Copilot
      * means nobody has chosen, while a Copilot whose list is `[]` means somebody chose *none*. A
@@ -94,6 +106,10 @@ async function create() {
       // Sent even when empty, because empty is a decision here: the Copilot's set was seeded in,
       // and unchecking all of it has to mean none rather than "ask the Copilot again".
       widgets: [...widgets.value],
+      // The pair is always defined here — seeded from the Copilot or the default — so it is
+      // always sent: the server treats absent as "no opinion" and this dialog does have one.
+      allTools: allTools.value,
+      tools: [...tools.value],
     });
     if (session && title.value.trim()) {
       // Still a second call, and not an oversight: a title sent *at create* writes
@@ -190,6 +206,12 @@ async function create() {
               {{ t("session.new.noCopilots") }}
             </div>
           </div>
+
+          <ToolChecklist
+            v-model:all-tools="allTools"
+            v-model:tools="tools"
+            testid-prefix="new-session"
+          />
 
           <div class="field widget-checks">
             <label>{{ t("widgets.heading") }}</label>

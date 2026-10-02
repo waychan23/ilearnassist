@@ -131,6 +131,22 @@ describe("widget gating", () => {
     expect(await quizRows(locked.id)).toHaveLength(2);
   });
 
+  it("sends all three quiz tools in the real request body with the widget", async () => {
+    // Direct evidence at the wire: the SDK's converted `tools` array names the quiz trio,
+    // independent of the tool actually executing below.
+    const session = await quizSession();
+    llm.setTurns([{ content: "好。" }]);
+    await chat(session.id, "开始");
+
+    const streamed = llm.requests().filter((r) => r.stream === true);
+    const names = (streamed[0]!.tools as { function: { name: string } }[]).map(
+      (t) => t.function.name
+    );
+    for (const name of ["ila_quiz", "ila_review_quiz", "ila_makeup_quiz"]) {
+      expect(names).toContain(name);
+    }
+  });
+
   it("picks up a widget installed mid-conversation", async () => {
     const workspace = await newWorkspace(env, "mid-install");
     const session = await newSession(env, workspace.id);

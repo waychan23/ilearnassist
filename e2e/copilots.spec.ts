@@ -254,3 +254,50 @@ test("the built-in assistant is usable by an account that does not own it", asyn
     );
   }
 });
+
+/**
+ * The tool checklist restored to the session dialogs. The claim is end-to-end: the create
+ * dialog seeds the pair from the chosen Copilot and the request override lands, and the
+ * settings dialog can change it afterwards — the server suite pins each route in isolation.
+ */
+test("the session dialogs carry the Copilot's tool list and can change it", async ({ page }) => {
+  const NAME = "限工具助教";
+  const box = (id: string) => page.getByTestId(`tool-check-${id}`).locator("input");
+
+  // A Copilot restricted to read_file: master off, then one tool ticked.
+  await page.goto("/");
+  await page.getByTestId("open-copilots").click();
+  await page.getByTestId("new-copilot").click();
+  await page.getByPlaceholder("例如：代码助手").fill(NAME);
+  await page.getByTestId("copilot-all-tools").click();
+  await box("read_file").check();
+  await page.getByTestId("save-copilot").click();
+  await page.getByTestId("close-copilots").click();
+
+  // The new-session dialog seeds the pair from the chosen Copilot.
+  await enterWorkspace(page);
+  await page.getByTestId("new-session").click();
+  await page.getByTestId("copilot-option").filter({ hasText: NAME }).click();
+  await expect(page.getByTestId("new-session-all-tools")).not.toBeChecked();
+  await expect(box("read_file")).toBeChecked();
+  await expect(box("web_search")).not.toBeChecked();
+
+  // Override before creating; the request pair wins over the snapshot.
+  await box("web_search").check();
+  await page.getByTestId("create-session").click();
+
+  // The conversation's settings carry the overridden list.
+  await page.getByTestId("chat-session-settings").click();
+  await expect(page.getByTestId("session-all-tools")).not.toBeChecked();
+  await expect(box("read_file")).toBeChecked();
+  await expect(box("web_search")).toBeChecked();
+
+  // Narrow further here; it persists across the round trip.
+  await box("read_file").uncheck();
+  await page.getByTestId("session-settings-save").click();
+
+  await page.getByTestId("chat-session-settings").click();
+  await expect(page.getByTestId("session-all-tools")).not.toBeChecked();
+  await expect(box("read_file")).not.toBeChecked();
+  await expect(box("web_search")).toBeChecked();
+});

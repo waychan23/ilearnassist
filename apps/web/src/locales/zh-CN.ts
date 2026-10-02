@@ -1157,6 +1157,20 @@ export default {
     maxStepsHint: "单位「轮」，单轮回复中最多执行多少次「模型 → 工具」循环。",
   },
 
+  /**
+   * The one wording home for the tool allow-list editor, shared by the Copilot editor and the
+   * session create/settings dialogs — which is why the hints name neither: they must stay true
+   * in both contexts.
+   */
+  toolChecklist: {
+    heading: "可用工具",
+    allTools: "全部工具可用",
+    allToolsHint: "可以使用所有工具，之后新增的工具也会自动包含。",
+    toolsHint: "只有勾选的工具可用；一个都不勾选就是不使用任何工具。",
+    boundToolsHint:
+      "少数工具随控件自动启用（目前只有「测验」控件的出题与批改工具），不在此列表中，也无需勾选。计划、图表这类工具在这里可以正常勾选。",
+  },
+
   copilot: {
     edit: "编辑助理",
     create: "新建助理",
@@ -1166,11 +1180,6 @@ export default {
     systemPrompt: "System Prompt（设定）",
     systemPromptPlaceholder: "定义这个助理的角色、能力与行为约束…",
     systemPromptHint: "留空则使用内置的通用助手设定。",
-    tools: "可用工具",
-    allTools: "全部工具可用",
-    allToolsHint: "这个助理可以使用所有工具，之后新增的工具也会自动包含。",
-    toolsHint: "只有勾选的工具可用；一个都不勾选就是不使用任何工具。",
-    boundToolsHint: "少数工具随控件自动启用（目前只有「测验」控件的出题与批改工具），不在此列表中，也无需勾选。计划、图表这类工具在这里可以正常勾选。",
     public: "公开这个助理",
     publicHint: "公开后所有账号都能看到并使用它，但只有你能修改或删除。",
     defaults: "默认参数（新建会话时复制到会话中，之后可在会话里单独调整）",

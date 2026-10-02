@@ -718,6 +718,39 @@ describe("sessions", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("lets the create request override the copied copilot tool list", async () => {
+    // The dialog seeds the pair from the chosen Copilot and may tick it differently, so the
+    // request wins over the snapshot; absent (other callers) would fall through to it.
+    const workspace = await newWorkspace(env);
+    const copilot = (
+      await inject({
+        method: "POST",
+        url: "/api/copilots",
+        payload: { name: "Restricted", allTools: false, tools: ["read_file"] },
+      })
+    ).json<Copilot>();
+
+    const session = await newSession(env, workspace.id, {
+      copilotId: copilot.id,
+      allTools: false,
+      tools: ["web_search"],
+    });
+    expect(session).toMatchObject({ allTools: false, tools: ["web_search"] });
+  });
+
+  it("takes a tool list with no copilot when one is sent, and defaults to every tool otherwise", async () => {
+    const workspace = await newWorkspace(env);
+
+    const narrowed = await newSession(env, workspace.id, {
+      allTools: false,
+      tools: ["read_file"],
+    });
+    expect(narrowed).toMatchObject({ copilotId: null, allTools: false, tools: ["read_file"] });
+
+    const ordinary = await newSession(env, workspace.id, {});
+    expect(ordinary).toMatchObject({ allTools: true, tools: [] });
+  });
+
   it("lets a conversation hold its own prompt, apart from the copilot's", async () => {
     const workspace = await newWorkspace(env);
     const copilot = (

@@ -4200,6 +4200,15 @@ export interface CreateSessionInput {
    * so this is one write rather than the create-then-edit the client used to do.
    */
   settings?: SessionSettings;
+  /**
+   * Tool allow-list chosen before the conversation existed, overriding the chosen Copilot's
+   * snapshot. The pair is seeded in the dialog from the Copilot and may be ticked differently.
+   *
+   * **Absent** falls through to the Copilot's own allow-list, and then to "every tool" — the
+   * same absent-means-no-opinion rule `widgets` follows.
+   */
+  allTools?: boolean;
+  tools?: string[];
 }
 
 /**

@@ -1336,6 +1336,61 @@ describe("sessions", () => {
     );
   });
 
+  it("keeps an explicit no-Copilot choice instead of inheriting the current conversation's", async () => {
+    /*
+     * `null` means "none" and `undefined` means "no opinion" — a `??` fallback treated the two
+     * alike, so picking 不使用助理 while a Copilot conversation was open silently assigned that
+     * Copilot, system prompt and all.
+     */
+    const store = await readyStore({
+      sessions: [session({ copilotId: "builtin-guided-learning" })],
+    });
+    expect(store.activeCopilotId).toBe("builtin-guided-learning");
+
+    await store.createSession({ copilotId: null });
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(
+      "w1",
+      expect.objectContaining({ copilotId: null })
+    );
+  });
+
+  it("forwards the tool list chosen in the new-session dialog", async () => {
+    const store = await readyStore();
+    store.activeSessionId = null;
+
+    await store.createSession({ allTools: false, tools: ["read_file"] });
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(
+      "w1",
+      expect.objectContaining({ allTools: false, tools: ["read_file"] })
+    );
+  });
+
+  it("omits the tool list when a caller has no opinion", async () => {
+    const store = await readyStore();
+    store.activeSessionId = null;
+
+    await store.createSession();
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(
+      "w1",
+      expect.not.objectContaining({ allTools: expect.anything(), tools: expect.anything() })
+    );
+  });
+
+  it("replaces the active session's own tool list", async () => {
+    const store = await readyStore();
+
+    await store.updateSessionTools(false, ["read_file"]);
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith("s1", {
+      allTools: false,
+      tools: ["read_file"],
+    });
+    expect(store.activeSession).toMatchObject({ allTools: false, tools: ["read_file"] });
+  });
+
   it("trims a rename and ignores a blank one", async () => {
     const store = await readyStore();
     await store.renameSession("s1", "  New Title  ");
