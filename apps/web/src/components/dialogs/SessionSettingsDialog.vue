@@ -7,6 +7,7 @@ import Icon from "../Icon.vue";
 import GenerationParams from "../GenerationParams.vue";
 import WriteLocationField from "../WriteLocationField.vue";
 import WidgetToggleList from "./WidgetToggleList.vue";
+import ToolChecklist from "../ToolChecklist.vue";
 
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
@@ -30,11 +31,28 @@ const error = ref<string | null>(null);
  */
 const title = ref("");
 const description = ref("");
+/**
+ * The conversation's own tool allow-list, seeded from the live session. Like the widget list it
+ * is only shown for a conversation that exists: the create dialog owns pre-existence choices.
+ */
+const allTools = ref(true);
+const tools = ref<string[]>([]);
+/**
+ * Set while Save's writes are in flight. Each PATCH replaces the active session, which would
+ * otherwise re-seed the form from an *intermediate* row that has not received the later
+ * fields — reverting the very edits the later PATCHes are about to send (the tool narrowing
+ * and a changed persona both lost that way). Readback comes from `saveIdentity` and the
+ * fresh seed on next open.
+ */
+let saving = false;
 watch(
   () => store.activeSession,
   (s) => {
+    if (saving) return;
     title.value = s?.title ?? "";
     description.value = s?.description ?? "";
+    allTools.value = s?.allTools ?? true;
+    tools.value = [...(s?.tools ?? [])];
   },
   { immediate: true }
 );
@@ -126,6 +144,7 @@ watch(
  * half-applied from this button's point of view.
  */
 async function save(): Promise<void> {
+  saving = true;
   try {
     await store.updateSettings({
       ...(params.value?.commit() ?? {}),
@@ -133,11 +152,14 @@ async function save(): Promise<void> {
     });
     if (store.activeSession) {
       await store.updateSessionPrompt(prompt.value);
+      await store.updateSessionTools(allTools.value, [...tools.value]);
       await saveIdentity();
     }
     emit("close");
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    saving = false;
   }
 }
 
@@ -245,6 +267,17 @@ const scopeNote = computed(() =>
             v-model="writeLocation"
             :inherit-label="inheritLabel"
             testid="session-write-location"
+          />
+
+          <!--
+            Only for a conversation that exists, like the prompt and widget sections: the
+            create dialog seeds the list before that. Master test id carries the session prefix.
+          -->
+          <ToolChecklist
+            v-if="store.activeSession"
+            v-model:all-tools="allTools"
+            v-model:tools="tools"
+            testid-prefix="session"
           />
 
           <!--

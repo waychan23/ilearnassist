@@ -863,6 +863,17 @@ const en: typeof MessageSchema = {
     maxStepsHint: "How many times the model → tool loop may run within a single reply.",
   },
 
+  // The one wording home for the tool allow-list editor; shared by the Copilot editor and the
+  // session create/settings dialogs, so the hints name neither and stay true in both contexts.
+  toolChecklist: {
+    heading: "Available tools",
+    allTools: "All tools available",
+    allToolsHint: "Every tool may be used, including any added later.",
+    toolsHint: "Only the ticked tools are available; none ticked means no tools at all.",
+    boundToolsHint:
+      "A few tools come with a widget and are deliberately not listed here (today only the Quiz widget's ask and grade tools): they switch on automatically when that widget is installed. Tools like the plan and diagram ones are ordinary and can be ticked.",
+  },
+
   copilot: {
     edit: "Edit Assistant",
     create: "New Assistant",
@@ -872,13 +883,6 @@ const en: typeof MessageSchema = {
     systemPrompt: "System prompt",
     systemPromptPlaceholder: "Define this Assistant's role, abilities and behavioural constraints…",
     systemPromptHint: "Leave blank to use the built-in general-purpose assistant.",
-    tools: "Available tools",
-    allTools: "All tools available",
-    allToolsHint:
-      "This Assistant may use every tool, including any added later.",
-    toolsHint: "Only the ticked tools are available; none ticked means no tools at all.",
-    boundToolsHint:
-      "A few tools come with a widget and are deliberately not listed here (today only the Quiz widget's ask and grade tools): they switch on automatically when that widget is installed. Tools like the plan and diagram ones are ordinary and can be ticked.",
     public: "Publish this Assistant",
     publicHint:
       "Every account can then see and use it, but only you can edit or delete it.",

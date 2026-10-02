@@ -1485,6 +1485,8 @@ export const useAppStore = defineStore("app", () => {
       copilotId?: string | null;
       settings?: SessionSettings;
       widgets?: WidgetId[];
+      allTools?: boolean;
+      tools?: string[];
     } = {}
   ): Promise<Session | null> {
     if (!activeWorkspaceId.value) return null;
@@ -1509,6 +1511,10 @@ export const useAppStore = defineStore("app", () => {
       // `[]` is a decision and is sent as one — it means "none", and omitting it would fall
       // through to the Copilot's selection instead. Only `undefined` leaves the choice open.
       ...(options.widgets !== undefined ? { widgets: options.widgets } : {}),
+      // Same rule: absent says "take the Copilot snapshot"; the dialog always seeds a value and
+      // so always overrides, while other callers leave it to the server.
+      ...(options.allTools !== undefined ? { allTools: options.allTools } : {}),
+      ...(options.tools !== undefined ? { tools: options.tools } : {}),
     });
     draftSettings.value = {};
     sessions.value = [created, ...sessions.value.filter((s) => s.id !== created.id)];
@@ -1982,6 +1988,16 @@ export const useAppStore = defineStore("app", () => {
     const session = activeSession.value;
     if (!session) return;
     replaceSession(await api.updateSession(session.id, { description }));
+  }
+
+  /**
+   * Replace the conversation's own tool allow-list. The pair is written together like every
+   * other allow-list: `allTools` is authoritative, and the grid is the narrowed list.
+   */
+  async function updateSessionTools(allTools: boolean, tools: string[]): Promise<void> {
+    const session = activeSession.value;
+    if (!session) return;
+    replaceSession(await api.updateSession(session.id, { allTools, tools }));
   }
 
   /* ------------------------------ copilots --------------------------------- */
@@ -3677,6 +3693,7 @@ export const useAppStore = defineStore("app", () => {
     setProviderAndModel,
     updateSessionPrompt,
     updateSessionDescription,
+    updateSessionTools,
     saveCopilot,
     deleteCopilot,
     copyCopilotToMine,

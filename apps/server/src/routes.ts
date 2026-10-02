@@ -2203,10 +2203,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // meant deleting one silently widened them, an empty list reading as "all tools".
       copilotName: copilot?.name ?? "",
       systemPrompt: copilot?.systemPrompt ?? "",
-      // A Copilotless conversation gets every tool, as it always has; the allowlist is only
-      // meaningful alongside `allTools: false`, which is what a restricting Copilot carries.
-      allTools: copilot?.allTools ?? true,
-      tools: copilot ? [...copilot.tools] : [],
+      // The dialog's own ticking overrides the Copilot snapshot; absent falls through to it.
+      // A Copilotless conversation with no request value gets every tool, as it always has.
+      allTools: body?.allTools ?? copilot?.allTools ?? true,
+      tools: body?.tools ?? (copilot ? [...copilot.tools] : []),
       /*
        * A caller that names nothing gets the placeholder, and then the sibling check numbers it
        * — so three conversations created in a row read `(未命名) 会话`, `(未命名) 会话 (2)` and

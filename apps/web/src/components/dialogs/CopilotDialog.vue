@@ -2,15 +2,9 @@
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../../stores/app";
-// From `shared`, not a local literal: the server filters by exactly these names, so a copy
-// that drifted would offer a tool the server does not know, or hide one it does. It had
-// already drifted once — the local list was missing `read_document`.
 import {
-  ALL_TOOL_NAMES,
   defaultWidgetEnabled,
   defaultWidgetIdsForScope,
-  isBuiltinTool,
-  isWidgetBoundTool,
   widgetsForScope,
 } from "../../api/types";
 import type { Copilot, FileLocation, SessionSettings, WidgetId } from "../../api/types";
@@ -19,38 +13,13 @@ import { widgetLabel } from "../../widgets/registry";
 import Icon from "../Icon.vue";
 import GenerationParams from "../GenerationParams.vue";
 import WriteLocationField from "../WriteLocationField.vue";
+import ToolChecklist from "../ToolChecklist.vue";
 
 const props = defineProps<{ copilot: Copilot | null }>();
 const emit = defineEmits<{ close: []; save: [draft: CopilotDraft] }>();
 
 const store = useAppStore();
-const { t, te } = useI18n();
-
-/** The tool list shares the tools.name.* namespace with the tool-call card. */
-const toolLabel = (name: string): string => {
-  const key = "tools.name." + name;
-  return te(key) ? t(key) : name;
-};
-
-/**
- * Two kinds of tool are not checkable, and each predicate draws one line.
- *
- * `required`-mode tools: a Copilot allow-list can neither enable them (the widget install does)
- * nor remove them (they bypass the list in all three states), so a box here would be a control
- * that did nothing. Today that is the quiz pair and nothing else — the plan and diagram tools
- * are `auto-install`, which means they are ordinary tools a Copilot may switch like any other.
- *
- * **Built-in** tools (`isBuiltinTool`): the conversation's own record and transcript reads,
- * assembled in every turn whatever the allow-list says, because a conversation with no
- * capabilities is not one that asked to forget what was said — and the smart-context mode's
- * prompt names both as the way back to earlier messages. A box that can never take effect is
- * the same lie as the one above.
- *
- * They still live in `ALL_TOOL_NAMES` so a stale allow-list naming one never errors.
- */
-const pickableTools = computed(() =>
-  ALL_TOOL_NAMES.filter((name) => !isWidgetBoundTool(name) && !isBuiltinTool(name))
-);
+const { t } = useI18n();
 
 /**
  * The generation parameters are a child component's business now — it was the third copy of that
@@ -168,35 +137,6 @@ function toggleWidget(id: WidgetId) {
   else widgets.value.splice(i, 1);
 }
 
-/** A tool reads as selected while the flag is on, whatever the list happens to hold. */
-function isToolChecked(name: string): boolean {
-  return allTools.value || draft.tools.includes(name);
-}
-
-function toggleTool(name: string) {
-  if (allTools.value) {
-    // Unchecking one box under "all" is how "everything except this" is said, and it is the
-    // only way to narrow from the flag without starting over from nothing. The list becomes
-    // the rest of the names, so what is on screen is what gets saved.
-    allTools.value = false;
-    draft.tools = ALL_TOOL_NAMES.filter((n) => n !== name);
-    return;
-  }
-  const i = draft.tools.indexOf(name);
-  if (i === -1) draft.tools.push(name);
-  else draft.tools.splice(i, 1);
-}
-
-/**
- * Turn "every tool" off.
- *
- * The list is left empty rather than pre-filled: unchecking the flag is a statement that the
- * selection is about to be made by hand, and the saved state has to be the one on screen.
- */
-function disableAllTools() {
-  draft.tools = [];
-}
-
 function save() {
   if (!draft.name.trim()) return;
   emit("save", {
@@ -257,39 +197,11 @@ function save() {
             <div class="hint">{{ t("copilot.systemPromptHint") }}</div>
           </div>
 
-          <div class="field">
-            <label>{{ t("copilot.tools") }}</label>
-            <!-- The flag writes the state the boxes show; leaving them in step by hand is what
-                 keeps "all tools" from meaning "the list happened to hold everything". -->
-            <label class="check-row">
-              <input
-                v-model="allTools"
-                type="checkbox"
-                data-testid="copilot-all-tools"
-                @change="allTools || disableAllTools()"
-              />
-              {{ t("copilot.allTools") }}
-            </label>
-            <div class="form-grid tool-checks">
-              <label
-                v-for="name in pickableTools"
-                :key="name"
-                class="check-row"
-                :data-testid="`tool-check-${name}`"
-              >
-                <input
-                  type="checkbox"
-                  :checked="isToolChecked(name)"
-                  @change="toggleTool(name)"
-                />
-                {{ toolLabel(name) }}
-              </label>
-            </div>
-            <div class="hint">
-              {{ allTools ? t("copilot.allToolsHint") : t("copilot.toolsHint") }}
-            </div>
-            <div class="hint">{{ t("copilot.boundToolsHint") }}</div>
-          </div>
+          <ToolChecklist
+            v-model:all-tools="allTools"
+            v-model:tools="draft.tools"
+            testid-prefix="copilot"
+          />
 
           <!-- Unticked by default. Publishing puts this wording in front of every account,
                so it is a decision rather than something to discover after the fact. -->
