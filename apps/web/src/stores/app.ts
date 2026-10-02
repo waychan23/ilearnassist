@@ -1506,7 +1506,15 @@ export const useAppStore = defineStore("app", () => {
        * `NewSessionDialog` sets it afterwards so it reads as `user`.
        */
       title: options.title ?? i18n.global.t("session.fallbackTitle"),
-      copilotId: options.copilotId ?? activeCopilotId.value ?? null,
+      /*
+       * `null` is the new-session dialog's deliberate "no Copilot" choice and must not fall
+       * through to the current conversation's Copilot — only `undefined` means "no opinion",
+       * the same rule the widget and tool lists follow below.
+       */
+      copilotId:
+        options.copilotId !== undefined
+          ? options.copilotId
+          : activeCopilotId.value ?? null,
       ...(staged.length ? { settings: Object.fromEntries(staged) } : {}),
       // `[]` is a decision and is sent as one — it means "none", and omitting it would fall
       // through to the Copilot's selection instead. Only `undefined` leaves the choice open.

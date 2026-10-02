@@ -1336,6 +1336,25 @@ describe("sessions", () => {
     );
   });
 
+  it("keeps an explicit no-Copilot choice instead of inheriting the current conversation's", async () => {
+    /*
+     * `null` means "none" and `undefined` means "no opinion" — a `??` fallback treated the two
+     * alike, so picking 不使用助理 while a Copilot conversation was open silently assigned that
+     * Copilot, system prompt and all.
+     */
+    const store = await readyStore({
+      sessions: [session({ copilotId: "builtin-guided-learning" })],
+    });
+    expect(store.activeCopilotId).toBe("builtin-guided-learning");
+
+    await store.createSession({ copilotId: null });
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(
+      "w1",
+      expect.objectContaining({ copilotId: null })
+    );
+  });
+
   it("forwards the tool list chosen in the new-session dialog", async () => {
     const store = await readyStore();
     store.activeSessionId = null;
