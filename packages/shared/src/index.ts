@@ -305,6 +305,206 @@ export function slugifyName(name: string, fallback: string): string {
   return base || fallback;
 }
 
+/* --------------------------- artifact identity math --------------------------- */
+
+/** Which kind of artifact a marker names. */
+export type ArtifactKind = "diagram" | "plot" | "file";
+
+/** One marker as written in the content, with its char range. */
+export interface ArtifactMarker {
+  kind: ArtifactKind;
+  /** Handle text, trimmed, as the model wrote it. */
+  handle: string;
+  /** File only: the write location named in the marker. */
+  location?: FileLocation;
+  /** Char range of the full marker in the content. */
+  start: number;
+  end: number;
+  startLine: number;
+}
+
+/** The identity an artifact tool call is matched by. */
+export interface ArtifactCallIdentity {
+  kind: ArtifactKind;
+  key: string;
+  location?: FileLocation;
+}
+
+/** A code-fence line (```` or `~~~`, three or more, optionally indented) with its char. */
+const ARTIFACT_FENCE_LINE = /^\s*(`{3,}|~{3,})/;
+
+/** Strip a diagram file extension from a name before it is slugified. */
+function diagramBaseName(handle: string): string {
+  return handle.replace(/\.(mmd|mermaid)$/i, "").trim();
+}
+
+/**
+ * Normalize a file handle/path to POSIX form, the way a relative write path is compared.
+ *
+ * Exported because the repair pass writes to the same normalized path the marker names, so
+ * the file it creates and the identity it is matched by cannot disagree.
+ */
+export function normalizeArtifactPath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/\/{2,}/g, "/")
+    .replace(/^\.\//, "")
+    .trim();
+}
+
+/**
+ * Every marker in content, found outside code fences, with character offsets.
+ *
+ * Fence-aware: marker-like text inside a code block is content and is not returned. Shared
+ * by the web's inline rendering and the server's missing-artifact check, so both sides
+ * agree on what counts as a marker.
+ */
+export function parseArtifactMarkers(content: string): ArtifactMarker[] {
+  const lines = content.split("\n");
+  const markers: ArtifactMarker[] = [];
+  let offset = 0;
+  let fence: "`" | "~" | null = null;
+
+  lines.forEach((line, index) => {
+    const lineStart = offset;
+    offset += line.length + 1;
+
+    const fenceMatch = line.match(ARTIFACT_FENCE_LINE);
+    if (fenceMatch) {
+      const mark = fenceMatch[1]![0] === "~" ? "~" : "`";
+      if (fence === null) fence = mark;
+      else if (mark === fence) fence = null;
+      return;
+    }
+    if (fence !== null) return;
+
+    const scan = new RegExp(ARTIFACT_MARKER_PATTERN, "g");
+    for (const match of line.matchAll(scan)) {
+      if (match.index === undefined) continue;
+      const kind = match[1] as ArtifactKind;
+      const handle = match[2]!.trim();
+      const location = match[3] as FileLocation | undefined;
+      const start = lineStart + match.index;
+      markers.push({
+        kind,
+        handle,
+        ...(location ? { location } : {}),
+        start,
+        end: start + match[0].length,
+        startLine: index,
+      });
+    }
+  });
+
+  return markers;
+}
+
+/**
+ * The identity an artifact tool call is matched by, or `null` when its input cannot be
+ * read or does not name the artifact.
+ */
+export function artifactCallIdentity(tc: ToolCall): ArtifactCallIdentity | null {
+  let args: unknown;
+  try {
+    args = JSON.parse(tc.input);
+  } catch {
+    return null;
+  }
+
+  if (tc.name === DIAGRAM_TOOL_NAME) {
+    const name = (args as { name?: unknown }).name;
+    if (typeof name !== "string" || !name.trim()) return null;
+    return { kind: "diagram", key: slugifyName(diagramBaseName(name), "diagram") };
+  }
+  if (tc.name === PLOT_TOOL_NAME) {
+    const name = (args as { name?: unknown }).name;
+    if (typeof name !== "string" || !name.trim()) return null;
+    return { kind: "plot", key: slugifyName(name, "plot") };
+  }
+  if (tc.name === WRITE_FILE_TOOL_NAME) {
+    const path = (args as { path?: unknown }).path;
+    if (typeof path !== "string" || !path.trim()) return null;
+    const location = (args as { location?: unknown }).location;
+    return {
+      kind: "file",
+      key: normalizeArtifactPath(path),
+      ...(location === "session" || location === "workspace" ? { location } : {}),
+    };
+  }
+  return null;
+}
+
+/** The identity a marker is matched by. */
+export function markerIdentity(marker: ArtifactMarker): {
+  key: string;
+  location?: FileLocation;
+} {
+  if (marker.kind === "diagram") {
+    return { key: slugifyName(diagramBaseName(marker.handle), "diagram") };
+  }
+  if (marker.kind === "plot") {
+    return { key: slugifyName(marker.handle, "plot") };
+  }
+  return {
+    key: normalizeArtifactPath(marker.handle),
+    ...(marker.location ? { location: marker.location } : {}),
+  };
+}
+
+/** One marker with the call it was matched to, if any. */
+export interface ArtifactMarkerMatch {
+  marker: ArtifactMarker;
+  call?: ToolCall;
+}
+
+/**
+ * Match every marker in content to an artifact tool call, one-to-one, in order.
+ *
+ * The one place the identity arithmetic lives: diagram/plot match on kind + slugified name
+ * (a diagram extension stripped first), file on the POSIX-normalized path — strict on
+ * location only when the marker names one. `consumedCallIds` is what the web's inline
+ * builder needs; the server reads the entries with no `call` as the missing artifacts.
+ */
+export function matchArtifactMarkers(
+  content: string,
+  toolCalls: readonly ToolCall[]
+): { matches: ArtifactMarkerMatch[]; consumedCallIds: ReadonlySet<string> } {
+  const markers = parseArtifactMarkers(content);
+  const entries = toolCalls
+    .filter((tc) => isArtifactTool(tc.name))
+    .map((tc) => ({ tc, identity: artifactCallIdentity(tc) }));
+
+  const consumed = new Set<string>();
+  const matches: ArtifactMarkerMatch[] = [];
+
+  for (const marker of markers) {
+    const mid = markerIdentity(marker);
+    const entry = entries.find((e): boolean => {
+      const id = e.identity;
+      if (!id || consumed.has(e.tc.id)) return false;
+      if (id.kind !== marker.kind || id.key !== mid.key) return false;
+      if (marker.kind === "file" && marker.location && id.location !== marker.location) {
+        return false;
+      }
+      return true;
+    });
+    if (entry) consumed.add(entry.tc.id);
+    matches.push({ marker, ...(entry ? { call: entry.tc } : {}) });
+  }
+
+  return { matches, consumedCallIds: consumed };
+}
+
+/** Every marker in content that no artifact tool call answers. */
+export function unmatchedArtifactMarkers(
+  content: string,
+  toolCalls: readonly ToolCall[]
+): ArtifactMarker[] {
+  return matchArtifactMarkers(content, toolCalls)
+    .matches.filter((m) => !m.call)
+    .map((m) => m.marker);
+}
+
 /**
  * The tool the sources panel's manual keep is drawn on.
  *
@@ -2010,10 +2210,10 @@ export interface UpdateInsightInput {
  * What a model call was **for**.
  *
  * The distinction the requirement asks for, and the reason a ledger exists rather than a sum over
- * `messages`: only `chat` produces a message. The other six are calls the server makes on its
+ * `messages`: only `chat` produces a message. The others are calls the server makes on its
  * own, and they cost real tokens that no transcript records — an auto-title, a post-turn
- * classification, a button-triggered reflection, an image description and a manual context
- * compaction.
+ * classification, a button-triggered reflection, an image description, a manual context
+ * compaction, a preference extraction and a missing-artifact repair.
  *
  * Ids rather than labels: the client renders them through the catalog, so a new purpose is an
  * entry here and a key in two catalogs — the same rule `ApiErrorCode` follows.
@@ -2026,6 +2226,7 @@ export const USAGE_PURPOSES = [
   "summary.media",
   "summary.context",
   "preference",
+  "artifact",
 ] as const;
 
 export type UsagePurpose = (typeof USAGE_PURPOSES)[number];
@@ -2555,6 +2756,20 @@ export const API_ERROR_CODES = [
   // Nothing to regenerate: no live messages, a tail that is the user's own message, or an
   // assistant tail still waiting on the user's answer (the interactive card owns that state).
   "NO_REPLY_TO_REGENERATE",
+  // A manual artifact repair named a marker the message does not hold, or one an artifact call
+  // already answers. One code for both: the client's move is the same — re-read the message —
+  // and distinguishing them would let a marker offset be probed.
+  "ARTIFACT_NOT_FOUND",
+  // The marker's tool (ila_diagram / ila_plot / write_file) is not assembled for this
+  // conversation — switched off for the account or excluded by the Copilot's allow-list.
+  "ARTIFACT_TOOL_UNAVAILABLE",
+  // The repair call could not produce a usable artifact: the provider failed, the model would
+  // not call the tool, or the tool refused its arguments twice. The reply itself is untouched.
+  "ARTIFACT_REPAIR_FAILED",
+  // A file marker's path already holds a live file. Its own code rather than FILE_EXISTS
+  // because the client's move is not "pick another name": it is "confirm you want this
+  // overwritten", and only then resend the repair with `overwrite`.
+  "ARTIFACT_EXISTS",
   // A turn is streaming for this conversation right now. Only the two tail-mutating routes
   // refuse on it — /chat has no such guard, deliberately (see its note in routes.ts).
   "TURN_IN_PROGRESS",

@@ -909,6 +909,25 @@ export const api = {
     request<{ ok: boolean }>(`/sessions/${sessionId}/messages/${messageId}`, { method: "DELETE" }),
 
   /**
+   * Generate the artifact one dangling inline marker names, in place.
+   *
+   * A long POST on purpose, like the insight pass: one out-of-band model call plus the real
+   * artifact tool, answering with the updated message when it is done, so the slot can disable
+   * itself and say it is working. `overwrite` is the second press after `ARTIFACT_EXISTS` —
+   * the first request for a file path that already holds a live file is refused rather than
+   * silently replacing bytes the user can see.
+   */
+  repairArtifact: (
+    sessionId: string,
+    messageId: string,
+    input: { start: number; overwrite?: boolean }
+  ) =>
+    request<{ message: Message }>(
+      `/sessions/${sessionId}/messages/${messageId}/artifacts/repair`,
+      { method: "POST", body: JSON.stringify(input) }
+    ),
+
+  /**
    * Branch a conversation at one message.
    *
    * The title is the only thing the client contributes: the copy — the messages up to and

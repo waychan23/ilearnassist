@@ -6,6 +6,7 @@ import {
   isInteractiveTool,
   stripInlineMarkers,
   TABLE_TOOL_NAME,
+  type ArtifactMarker,
   type Message,
   type ToolCall,
   type TurnReference,
@@ -250,6 +251,11 @@ interface RenderedSlotPart {
   kind: "slot";
   status: SlotStatus;
   toolCall?: ToolCall;
+  /**
+   * The marker itself, when no call answers it. Carried through so the dangling branch can
+   * offer the repair control, which needs the kind and handle it names.
+   */
+  marker?: ArtifactMarker;
 }
 type RenderedPart = RenderedTextPart | RenderedSlotPart;
 
@@ -271,6 +277,7 @@ const renderedParts = computed<RenderedPart[]>(() => {
         kind: "slot",
         status: part.status,
         ...(part.toolCall ? { toolCall: part.toolCall } : {}),
+        ...(part.marker ? { marker: part.marker } : {}),
       });
       return;
     }
@@ -471,6 +478,37 @@ async function regenerate(): Promise<void> {
   if (ok) await store.regenerateLastMessage();
 }
 
+/**
+ * Which dangling slot, if any, is generating right now — the marker's offset in the content,
+ * which is what the repair route is addressed by. Local to the message because only one slot
+ * in one bubble can be pressed at a time, and the turn is over by the time this renders.
+ */
+const repairingStart = ref<number | null>(null);
+
+/**
+ * Generate the artifact a dangling slot names.
+ *
+ * A file path that already holds a live file is a decision rather than a repair, so the first
+ * request comes back `"exists"` and the confirmation is put here — the same shape the delete
+ * and regenerate controls use. The store reports every other failure through the toast.
+ */
+async function repairArtifact(marker?: ArtifactMarker): Promise<void> {
+  const messageId = props.message?.id;
+  if (!messageId || !marker || repairingStart.value !== null) return;
+  repairingStart.value = marker.start;
+  try {
+    const outcome = await store.repairArtifact(messageId, marker.start, marker.kind);
+    if (outcome !== "exists") return;
+    const ok = await confirm({
+      message: t("inlineArtifact.overwriteConfirm"),
+      danger: true,
+    });
+    if (ok) await store.repairArtifact(messageId, marker.start, marker.kind, true);
+  } finally {
+    repairingStart.value = null;
+  }
+}
+
 const usage = computed(() => props.message?.usage ?? null);
 
 /**
@@ -643,7 +681,29 @@ const usageText = computed(() => {
               class="slot-state dangling"
               data-testid="artifact-dangling"
             >
-              <Icon name="warning" /> {{ t("inlineArtifact.dangling") }}
+              <Icon name="warning" />
+              <span>{{ t("inlineArtifact.dangling") }}</span>
+              <!--
+                The way back for every case the automatic pass could not cover: a stopped
+                turn, a provider that was down, a marker from before the pass existed. Only
+                on a settled message — `dangling` itself is only produced once settled.
+              -->
+              <button
+                v-if="part.marker"
+                class="icon-btn act repair"
+                data-testid="artifact-repair"
+                :disabled="repairingStart !== null"
+                :title="t('inlineArtifact.repair')"
+                :aria-label="t('inlineArtifact.repair')"
+                @click="repairArtifact(part.marker)"
+              >
+                <Icon name="retry" :class="{ spin: repairingStart === part.marker.start }" />
+                {{
+                  repairingStart === part.marker.start
+                    ? t("inlineArtifact.repairing")
+                    : t("inlineArtifact.repair")
+                }}
+              </button>
             </div>
             <div v-else class="slot-state error" data-testid="artifact-error">
               <Icon name="warning" /> {{ t("inlineArtifact.error") }}

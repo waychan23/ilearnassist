@@ -65,6 +65,9 @@ const en: typeof MessageSchema = {
     pending: "Preparing artifact…",
     dangling: "Referenced artifact not found",
     error: "Artifact failed",
+    repair: "Generate it",
+    repairing: "Generating…",
+    overwriteConfirm: "A file already exists at that path. Generating will overwrite it. Continue?",
   },
   /**
    * A table's title bar in a reply — the strip above the markdown, not the table itself. See the
@@ -246,6 +249,7 @@ const en: typeof MessageSchema = {
       "summary.media": "Image summary",
       "summary.context": "Context compaction",
       preference: "Preference extraction",
+      artifact: "Missing artifact repair",
     },
   },
 
@@ -1487,6 +1491,10 @@ const en: typeof MessageSchema = {
     NO_REPLY_TO_REGENERATE:
       "There is no reply to regenerate (the last message is not a reply, or it is waiting for your answer).",
     TURN_IN_PROGRESS: "The previous reply is still being generated. Stop it or wait for it to finish.",
+    ARTIFACT_NOT_FOUND: "This reference marker is gone, or its artifact has already been generated.",
+    ARTIFACT_TOOL_UNAVAILABLE: "This conversation does not have the tool that generates this kind of content.",
+    ARTIFACT_REPAIR_FAILED: "Generating it failed: {detail}. You can try again later.",
+    ARTIFACT_EXISTS: "A file already exists at that path. Generating will overwrite it.",
     SESSION_LOCKED: "This conversation is being edited from another client, so it is read-only here.",
     CONTEXT_EMPTY: "There is nothing to compact right now.",
     COMPACT_FAILED:

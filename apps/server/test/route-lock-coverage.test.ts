@@ -46,6 +46,9 @@ const MUST_BE_GATED = [
   "PATCH /api/sessions/:id/pin",
   "DELETE /api/sessions/:id",
   "DELETE /api/sessions/:id/messages/:messageId",
+  // A repair writes an artifact row and a tool call onto the message, both visible to the
+  // account's other clients the moment they land — the same claim a make-up answer makes.
+  "POST /api/sessions/:id/messages/:messageId/artifacts/repair",
   "PUT /api/sessions/:id/widgets/:widgetId",
   "POST /api/sessions/:id/plan/nodes/:nodeId/jump",
   "POST /api/sessions/:id/quizzes/makeup",

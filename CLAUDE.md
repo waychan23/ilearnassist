@@ -277,6 +277,7 @@ apps/server/src/
   agent/mediaSummary.ts   # one line about an image, from the model that saw it
   agent/threads.ts        # the out-of-band topic classifier call
   agent/insights.ts       # the out-of-band insight pass call
+  agent/artifactRepair.ts # the forced-tool-call that completes a missing artifact
   agent/reasoning.ts      # the `thinking` body field, capability-gated (both calls above)
   version.ts              # APP_VERSION, inlined from package.json at build time
   modelJson.ts            # fence-and-bracket stripping for an out-of-band answer (pure)
@@ -301,6 +302,7 @@ apps/server/src/
   workspaceScope.ts       # the `@` grant: one resolver, the only reader of the stored setting
   diagrams.ts             # diagram rows: naming, registerDiagram, the thread join, fileMissing
   plots.ts                # plot rows: plotName, validatePlotSpec, registerPlot, listPlotViews
+  artifactRepair.ts       # complete one dangling marker: generate, invoke the real tool, pin identity
   preferences.ts          # user preferences: save/replace, the injected block, the parser
   widgets.ts              # the widget-selection validator (pure)
   usage.ts                # the ledger: recordUsage, the aggregates, the reader-zone day arithmetic
@@ -1049,6 +1051,21 @@ public half.
   `stripInlineMarkers` (recall, explore, threads, compaction, titler, minimap, message
   copy), and slot subtrees carry `data-note-skip` inside one `data-note-root`. A model
   that cooperates gets pixel-exact placement; nothing depends on it.
+  **A marker with no call is repaired, not left dangling.** A reply that points at an
+  artifact and never calls the tool is the failure the marker syntax is most exposed to
+  (the marker is prose, the call is a tool decision), and `finishTurn` closes it before the
+  assistant row is written: `unmatchedArtifactMarkers` (shared, the same identity math the
+  renderer uses) finds the gaps, and `repairArtifactMarker` runs one forced-tool-call model
+  call (`agent/artifactRepair.ts`), pins the marker's own name/path onto the arguments, and
+  invokes the **real** artifact tool — so the row, the file, the widget install and the
+  thread placement all go through the ordinary path, and the synthetic call is appended to
+  the message that asked for it. `content` is never rewritten. A stopped or suspended turn
+  is skipped, a `write_file` whose path already holds a live file is skipped (the manual
+  control asks first), failures are swallowed to a warning, and the marker simply stays
+  dangling. The manual half is
+  `POST /api/sessions/:id/messages/:messageId/artifacts/repair` (session-locked, addressed
+  by the marker's `start` offset), the same mechanism for one marker on a settled message —
+  the way back for a stopped turn, a provider outage or a message from before this existed.
 - **The message is exactly what streamed, and nothing trims it.** A turn is several utterances —
   "我先把要点写成一个文件", then the answer — and `messages.content` is all of them, in step
   order, one paragraph each, joined by `STEP_SEPARATOR` (`"\n\n"`). The rule is stated as an
@@ -1221,13 +1238,14 @@ public half.
 - **Every model call writes one row to a ledger, and a message records the model that wrote it.**
   `usage_events` is what answers "what did this cost, and for what"; `messages.provider_*`/`model_*`
   is what answers "which model wrote this". Four things are load-bearing:
-  - **The ledger is not a sum over `messages`.** Only a *turn* writes a message, and five other calls
-    the server makes on its own — the auto-titler, the turn classifier, the insight pass, the image
-    describer, the context compactor — cost real tokens no transcript holds. A purpose breakdown
-    is only expressible because all six meet in one table. It is a pure DDL addition, so no
+  - **The ledger is not a sum over `messages`.** Only a *turn* writes a message, and the other
+    calls the server makes on its own — the auto-titler, the turn classifier, the insight pass, the
+    image describer, the context compactor, the preference extraction and the missing-artifact
+    repair — cost real tokens no transcript holds. A purpose breakdown
+    is only expressible because all of them meet in one table. It is a pure DDL addition, so no
     `SCHEMA_VERSION` bump.
   - **`agent/callUsage.ts` is the one place `usage_metadata` becomes a `MessageUsage`**, used by the
-    main loop and all five passes. Two mappings would be two chances for a transcript and a ledger
+    main loop and every out-of-band pass. Two mappings would be two chances for a transcript and a ledger
     row to disagree about what a provider reported. Each pass reports through an optional `onUsage`,
     and `passRecorder` in `routes.ts` resolves the attribution once — a new pass wired by hand is one
     wired with a different idea of whose call it was.

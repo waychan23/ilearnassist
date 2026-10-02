@@ -591,6 +591,16 @@ export const INSIGHT_REASONING_ENV = "ILA_INSIGHT_REASONING";
 export const PREFERENCE_REASONING_ENV = "ILA_PREFERENCE_REASONING";
 
 /**
+ * The environment variable that overrides the missing-artifact repair pass's reasoning mode.
+ *
+ * Its own fourth switch on the same argument: a repair is a *generation* — a mermaid source,
+ * a plot spec or a file body worked out from the reply that referenced it — so an operator
+ * may want thinking on here while the classifier has it off, or the reverse on a provider
+ * that bills for reasoning tokens.
+ */
+export const ARTIFACT_REASONING_ENV = "ILA_ARTIFACT_REASONING";
+
+/**
  * Whether an out-of-band model call may run chain-of-thought.
  *
  * - `auto` (unset): follow the model record — a model with the `reasoning` capability thinks
@@ -657,6 +667,13 @@ export function preferenceReasoningSetting(
   env: NodeJS.ProcessEnv = process.env
 ): OutOfBandReasoningSetting {
   return parseReasoning(env[PREFERENCE_REASONING_ENV], PREFERENCE_REASONING_ENV);
+}
+
+/** Read the missing-artifact repair pass's reasoning override. Defaults to `auto`. */
+export function artifactRepairReasoningSetting(
+  env: NodeJS.ProcessEnv = process.env
+): OutOfBandReasoningSetting {
+  return parseReasoning(env[ARTIFACT_REASONING_ENV], ARTIFACT_REASONING_ENV);
 }
 
 /**

@@ -97,11 +97,14 @@ import {
   USERNAME_MAX_LENGTH,
   WRITE_FILE_TOOL_NAME,
   isArtifactTool,
+  parseArtifactMarkers,
   stripInlineMarkers,
+  unmatchedArtifactMarkers,
   type QuizMakeupSubmitBody,
   type QuizQuestion,
 } from "@ilearnassist/shared";
 import {
+  artifactRepairReasoningSetting,
   insightReasoningSetting,
   preferenceReasoningSetting,
   threadReasoningSetting,
@@ -190,6 +193,12 @@ import type { DocumentService } from "./documents/service.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { serverTimeZone, turnClock, type TurnClock } from "./agent/clock.js";
 import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
+import { makeArtifactRepairer } from "./agent/artifactRepair.js";
+import {
+  ArtifactToolUnavailableError,
+  fileMarkerExists,
+  repairArtifactMarker,
+} from "./artifactRepair.js";
 import { applyContextSummary, summarizeContext, type CompactMessage } from "./agent/compact.js";
 import { smartContextGuidance } from "./agent/smartContext.js";
 import { describeModel } from "./agent/model.js";
@@ -505,6 +514,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   const insightReasoning = insightReasoningSetting();
   // And the preference extraction's third switch, same rule: it changes that call alone.
   const preferenceReasoning = preferenceReasoningSetting();
+  // And the missing-artifact repair pass's fourth, same rule: a repair is a generation rather
+  // than a judgement, so an operator may want thinking here that they do not want elsewhere.
+  const artifactReasoning = artifactRepairReasoningSetting();
 
   /**
    * The turn currently streaming for each session, so another request can stop it.
@@ -2670,6 +2682,149 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     }
     return reply.code(201).send(result.session);
   });
+
+  /**
+   * Complete one inline marker by hand — the control on a dangling artifact slot.
+   *
+   * The automatic pass in `finishTurn` covers the ordinary case; this is the way back for
+   * everything it cannot: a turn that was stopped, a repair whose call failed, a provider that
+   * was down, or a marker on a message from before this feature existed. It is the same
+   * mechanism one marker at a time — generate with the named tool, invoke the real tool, append
+   * the call to the message that asked for it — so the card appears in place with no rewrite of
+   * the reply's `content`.
+   *
+   * A **plain POST that returns the updated message**, not a stream: the slot disables itself
+   * and shows a generating state while it waits (the insight button's precedent), and the reply
+   * is the row the client already renders. Gated by the session lock like every other session
+   * write, and refused while a turn is streaming: the auto pass is already doing this work.
+   */
+  app.post(
+    "/api/sessions/:id/messages/:messageId/artifacts/repair",
+    { config: { requiresSessionLock: true } },
+    async (request, reply) => {
+      const userId = actor(request).id;
+      const { id, messageId } = request.params as { id: string; messageId: string };
+      const owned = db.getSessionForUser(id, userId);
+      if (!owned) {
+        return reply.code(404).send(apiError("SESSION_NOT_FOUND", "session not found"));
+      }
+      const message = db.getMessageForUser(messageId, userId);
+      if (!message || message.sessionId !== id) {
+        return reply.code(404).send(apiError("MESSAGE_NOT_FOUND", "message not found"));
+      }
+      // Only a reply can reference an artifact: a marker a user typed is their own text, and
+      // there is no tool call the server could append to their message.
+      if (message.role !== "assistant") {
+        return reply.code(404).send(apiError("ARTIFACT_NOT_FOUND", "no missing artifact there"));
+      }
+      if (activeTurns.has(id)) {
+        return reply.code(409).send(apiError("TURN_IN_PROGRESS", "a reply is still being generated"));
+      }
+
+      const body = request.body as { start?: unknown; overwrite?: unknown } | undefined;
+      const start =
+        typeof body?.start === "number" && Number.isFinite(body.start) ? body.start : null;
+      if (start === null) {
+        return reply.code(400).send(apiError("INVALID_FIELD", "start must be a number"));
+      }
+
+      // The marker is addressed by its offset in the content: unique per message, and the one
+      // piece of it a client can hold without re-deriving identities. A marker an artifact call
+      // already answers is refused the same way as one that is not there — both mean "the
+      // message has moved on", and distinguishing them would make offsets probeable.
+      const marker = parseArtifactMarkers(message.content).find((m) => m.start === start);
+      const stillMissing =
+        marker !== undefined &&
+        unmatchedArtifactMarkers(message.content, message.toolCalls ?? []).some(
+          (m) => m.start === start
+        );
+      if (!marker || !stillMissing) {
+        return reply.code(404).send(apiError("ARTIFACT_NOT_FOUND", "no missing artifact there"));
+      }
+
+      const ctx = turnContext(owned.session, owned.workspace, {
+        userId,
+        user: treeFor(actor(request)),
+        about: actor(request).about,
+      });
+
+      /*
+       * A file marker whose path already holds a live file is a decision rather than a repair:
+       * the bytes may be the model's from an earlier turn or the user's own. The first request
+       * answers `ARTIFACT_EXISTS`; only an explicit `overwrite: true` replaces them.
+       */
+      const existing = fileMarkerExists(db, {
+        userId,
+        workspaceSlug: owned.workspace.slug,
+        sessionId: id,
+        defaultLocation: ctx.writeLocation,
+        marker,
+        roots: {
+          workspaceDir: owned.workspace.workdirPath,
+          sessionDir: ctx.sessionDirPath,
+        },
+      });
+      if (existing && body?.overwrite !== true) {
+        return reply
+          .code(409)
+          .send(apiError("ARTIFACT_EXISTS", "a file already exists at that path"));
+      }
+
+      // The user message the reply answers, when there is one: extra context for the repair,
+      // read from the transcript rather than trusted from the body.
+      const history = db.listMessagesForUser(id, userId);
+      const at = history.findIndex((m) => m.id === messageId);
+      const preceding =
+        at > 0 ? [...history.slice(0, at)].reverse().find((m) => m.role === "user") : undefined;
+
+      let call: ToolCall;
+      try {
+        call = await repairArtifactMarker({
+          userId,
+          workspaceSlug: owned.workspace.slug,
+          sessionId: id,
+          defaultLocation: ctx.writeLocation,
+          content: message.content,
+          userMessage: preceding?.content ?? null,
+          marker,
+          tools: ctx.tools,
+          repairer: makeArtifactRepairer({
+            provider: ctx.provider,
+            modelId: ctx.modelId,
+            reasoning: artifactReasoning,
+            onUsage: passRecorder({
+              userId,
+              workspaceId: owned.session.workspaceId,
+              sessionId: id,
+              provider: ctx.provider,
+              modelId: ctx.modelId,
+              purpose: "artifact",
+            }),
+          }),
+        });
+      } catch (err) {
+        if (err instanceof ArtifactToolUnavailableError) {
+          return reply.code(400).send(apiError("ARTIFACT_TOOL_UNAVAILABLE", err.message));
+        }
+        const detail = err instanceof Error ? err.message : String(err);
+        return reply
+          .code(502)
+          .send(apiError("ARTIFACT_REPAIR_FAILED", detail, { detail }));
+      }
+
+      try {
+        ctx.onToolUsed?.(call.name);
+      } catch {
+        // The loop's note: a widget that did not install is a missing panel, not a failed call.
+      }
+
+      // Re-read before appending: the message row is the only copy of the call list, and a
+      // read-modify-write against a stale copy would drop whatever landed in between.
+      const fresh = db.getMessageForUser(messageId, userId) ?? message;
+      db.updateMessageToolCalls(messageId, [...(fresh.toolCalls ?? []), call]);
+      return { message: db.getMessageForUser(messageId, userId) ?? fresh };
+    }
+  );
 
   /* --------------------------------- widgets --------------------------------- */
 
@@ -4875,6 +5030,17 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
      * resolve against.
      */
     sessionDirPath: string;
+    /**
+     * The workspace's slug. Carried here for the repair pass: a file's stored path is built
+     * from it (`workspaceFilePath`/`sessionFilePath`), and the artifact tools' own writes go
+     * through closures that already know it — this is the one reader that does not.
+     */
+    workspaceSlug: string;
+    /**
+     * The workspace's shared sandbox. The repair pass checks a file marker's path on disk as
+     * well as in the registry, and the row may not exist yet for a file nobody has walked.
+     */
+    workspaceDirPath: string;
     writeLocation: FileLocation;
     /**
      * What time it is where the user is, read at the top of the turn.
@@ -5300,6 +5466,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       toolUse: isToolUseModel(provider, modelId),
       about: input.about,
       sessionDirPath: ownDir,
+      workspaceSlug: workspace.slug,
+      workspaceDirPath: workspace.workdirPath,
       writeLocation,
       clock,
       /*
@@ -5455,6 +5623,123 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   }
 
   /**
+   * How many missing artifacts one turn repairs automatically.
+   *
+   * A reply with more unanswered markers than this is one whose author went badly wrong, and
+   * repairing a whole page of artifacts is the manual control's job rather than this pass's.
+   * The cap also bounds the extra wait: the repairs run concurrently, so it is at most one
+   * repair call's latency, not a sum.
+   */
+  const MAX_MISSING_ARTIFACT_REPAIRS = 3;
+
+  /**
+   * Complete the inline markers a finished reply left unanswered, before it is persisted.
+   *
+   * The failure this answers is a reply that *points at* a diagram, figure or file with an
+   * inline marker and then never calls the tool that produces it. The marker is prose and the
+   * call is a tool decision, so the two can come apart; the client's rendering has always
+   * shown that as a dangling slot, and this is the server half — one repair call per missing
+   * marker, then the **real artifact tool** is invoked, so the object lands through the one
+   * writer the agent loop uses and the synthetic call is appended to the message that asked
+   * for it. The card then appears in place, and every consumer of a tool call (the 图表 panel,
+   * the thread classifier, the replayed history) sees an ordinary one.
+   *
+   * Deliberately **before** the assistant row is written, not after: `message_done` then
+   * carries the complete message, so no new event type and no client update path are needed,
+   * and nothing can race a later turn. It **never throws**: a repair that fails leaves the
+   * marker exactly as it was, and the manual control on the dangling slot is the way to it.
+   * A stopped or suspended turn is skipped entirely — the user ended that reply, or it is
+   * waiting on an answer the artifacts may depend on.
+   */
+  async function repairMissingArtifacts(input: {
+    userId: string;
+    session: Session;
+    ctx: TurnContext;
+    content: string;
+    userMessage?: string | null;
+    toolCalls: readonly ToolCall[];
+    signal?: AbortSignal;
+  }): Promise<ToolCall[]> {
+    const markers = unmatchedArtifactMarkers(input.content, input.toolCalls).slice(
+      0,
+      MAX_MISSING_ARTIFACT_REPAIRS
+    );
+    if (markers.length === 0) return [];
+
+    const repairer = makeArtifactRepairer({
+      provider: input.ctx.provider,
+      modelId: input.ctx.modelId,
+      reasoning: artifactReasoning,
+      signal: input.signal,
+      onUsage: passRecorder({
+        userId: input.userId,
+        workspaceId: input.session.workspaceId,
+        sessionId: input.session.id,
+        provider: input.ctx.provider,
+        modelId: input.ctx.modelId,
+        purpose: "artifact",
+      }),
+    });
+
+    const attempts = markers.map(async (marker): Promise<ToolCall | null> => {
+      if (input.signal?.aborted) return null;
+      /*
+       * A file that already exists is not overwritten automatically. The marker may be
+       * pointing at something from an earlier turn, and bytes the user can see are not this
+       * pass's to replace — the manual control asks before it does.
+       */
+      if (
+        fileMarkerExists(db, {
+          userId: input.userId,
+          workspaceSlug: input.ctx.workspaceSlug,
+          sessionId: input.session.id,
+          defaultLocation: input.ctx.writeLocation,
+          marker,
+          roots: {
+            workspaceDir: input.ctx.workspaceDirPath,
+            sessionDir: input.ctx.sessionDirPath,
+          },
+        })
+      ) {
+        return null;
+      }
+      try {
+        const call = await repairArtifactMarker({
+          userId: input.userId,
+          workspaceSlug: input.ctx.workspaceSlug,
+          sessionId: input.session.id,
+          defaultLocation: input.ctx.writeLocation,
+          content: input.content,
+          userMessage: input.userMessage,
+          marker,
+          tools: input.ctx.tools,
+          repairer,
+        });
+        try {
+          input.ctx.onToolUsed?.(call.name);
+        } catch {
+          // A widget that did not install is a missing panel, not a failed repair — the
+          // same note the loop makes about this callback.
+        }
+        return call;
+      } catch (err) {
+        // A tool that is not assembled is a configuration fact rather than a failure worth
+        // a warning; anything else may be a provider outage and is recorded.
+        if (!(err instanceof ArtifactToolUnavailableError)) {
+          app.log.warn(
+            { err, sessionId: input.session.id, kind: marker.kind },
+            "artifact repair failed"
+          );
+        }
+        return null;
+      }
+    });
+
+    const settled = await Promise.all(attempts);
+    return settled.filter((call): call is ToolCall => call !== null);
+  }
+
+  /**
    * Persist what a turn produced and close the stream: the assistant message, its
    * `message_done`, the conversation title when the conversation has not got one yet, and `done`.
    *
@@ -5492,6 +5777,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
        * target records a start position at this turn's assistant message.
        */
       chapterJump?: ChapterJump;
+      /**
+       * The turn's own abort signal, so Stop also cancels the missing-artifact repair the
+       * turn may run after its loop has returned — a stop that stopped paying for the model
+       * must stop paying for its repairs too.
+       */
+      signal?: AbortSignal;
     }
   ): Promise<void> {
     /*
@@ -5528,13 +5819,34 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           `⚠️ 本次附带的 ${unseen.length === 1 ? `图片「${unseen[0]!.name}」` : `${unseen.length} 张图片`}` +
           `未参与理解：当前模型不支持图片输入。`;
 
+    /*
+     * Complete the artifacts this reply referenced but never produced, **before** the row is
+     * written — the repair pass's own docblock has the reasoning. Two endings are skipped:
+     * a stopped turn, because the user ended that reply, and a suspended one, because the
+     * artifacts may depend on the answer that has not arrived. A truncated turn is repaired
+     * like any other: it is the ending where a missing artifact is most likely.
+     */
+    const repairedCalls =
+      !result.stopped && !result.awaiting
+        ? await repairMissingArtifacts({
+            userId,
+            session,
+            ctx,
+            content,
+            userMessage: opts.userMessage,
+            toolCalls: result.toolCalls,
+            signal: opts.signal,
+          })
+        : [];
+    const toolCalls = [...result.toolCalls, ...repairedCalls];
+
     const assistantMessage = db.createMessage({
       id: newId(),
       sessionId: id,
       role: "assistant",
       content,
       reasoning: result.reasoning || undefined,
-      toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: Object.keys(result.usage).length > 0 ? result.usage : undefined,
       model,
       stopped: result.stopped,
@@ -5854,6 +6166,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         user: treeFor(actor(request)),
         summaryId: summary?.id,
         turnStartedAtIso: new Date(turnStartedAt).toISOString(),
+        signal: turn.signal,
       });
     } catch (err) {
       failTurn(id, ctx, err, sse, summary?.id);
@@ -6154,6 +6467,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         summaryId: summary?.id,
         turnStartedAtIso: new Date(turnStartedAt).toISOString(),
         chapterJump,
+        signal: turn.signal,
       });
     } catch (err) {
       failTurn(id, ctx, err, sse, summary?.id);

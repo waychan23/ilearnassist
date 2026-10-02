@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   buildInlineParts,
-  parseArtifactMarkers,
   snapToBlockBoundary,
   type ArtifactSlot,
   type TextSegment,
 } from "../../src/utils/inlineArtifacts.js";
 import { renderMarkdown } from "../../src/utils/markdown.js";
-import { stripInlineMarkers, type ToolCall } from "../../src/api/types.js";
+import {
+  matchArtifactMarkers,
+  parseArtifactMarkers,
+  stripInlineMarkers,
+  unmatchedArtifactMarkers,
+  type ToolCall,
+} from "../../src/api/types.js";
 
 /** A tool call with the given args object as JSON input. */
 function call(
@@ -211,6 +216,47 @@ describe("parseArtifactMarkers", () => {
     expect(slots).toHaveLength(2);
     expect(slots[0]!.toolCall).toBeDefined();
     expect(slots[1]!.status).toBe("dangling");
+  });
+});
+
+/**
+ * The shared matcher the server's missing-artifact check is built on. It has to agree with the
+ * web's inline builder by construction — both call `matchArtifactMarkers` — so these cases pin
+ * the identity rules themselves: kind, slug, extension stripping and file location strictness.
+ */
+describe("matchArtifactMarkers", () => {
+  it("matches a diagram marker to its call across extension and slug differences", () => {
+    const content = "[[artifact:diagram/Auth Flow]]";
+    const call = diagramCall("auth flow.mmd");
+    const { matches, consumedCallIds } = matchArtifactMarkers(content, [call]);
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.call?.id).toBe(call.id);
+    expect(consumedCallIds.has(call.id)).toBe(true);
+    expect(unmatchedArtifactMarkers(content, [call])).toEqual([]);
+  });
+
+  it("keeps a file marker strict only when it names a location", () => {
+    const content = "[[artifact:file/notes.md?location=workspace]]";
+    const sessionCall = call("write_file", { path: "notes.md", location: "session" });
+    const workspaceCall = call("write_file", { path: "notes.md", location: "workspace" });
+
+    expect(unmatchedArtifactMarkers(content, [sessionCall])).toHaveLength(1);
+    expect(unmatchedArtifactMarkers(content, [workspaceCall])).toEqual([]);
+
+    const loose = "[[artifact:file/notes.md]]";
+    expect(unmatchedArtifactMarkers(loose, [sessionCall])).toEqual([]);
+  });
+
+  it("returns every marker with no call, in content order", () => {
+    const content =
+      "[[artifact:plot/one]]\n\n[[artifact:diagram/two]]\n\n[[artifact:file/three.md]]";
+    const missing = unmatchedArtifactMarkers(content, [diagramCall("two")]);
+
+    expect(missing.map((m) => [m.kind, m.handle])).toEqual([
+      ["plot", "one"],
+      ["file", "three.md"],
+    ]);
   });
 });
 

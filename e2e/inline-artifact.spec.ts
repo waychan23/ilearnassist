@@ -163,11 +163,43 @@ test("a marker shows a pending slot before the tool runs", async ({ page, reques
   await expect(page.getByTestId("diagram-card").last()).toBeVisible({ timeout: 20_000 });
 });
 
-test("a marker with no call becomes a dangling slot once the turn settles", async ({
+test("a marker with no call is completed automatically, in place", async ({ page, request }) => {
+  await freshSession(page);
+  await scriptLlm(request, {
+    turns: [
+      {
+        content: "引用前的文字。\n\n[[artifact:diagram/ghost]]\n\n引用后的文字。",
+      },
+      {
+        // The repair call the server makes once the reply ends without its artifact. The
+        // name deliberately differs: the server pins the marker's own identity.
+        toolCalls: [
+          {
+            id: "repair_d1",
+            name: "ila_diagram",
+            args: { name: "something else", source: FLOW, summary: "补的图" },
+          },
+        ],
+      },
+    ],
+  });
+
+  await send(page, "画图");
+  await expect(page.getByTestId("diagram-card").last()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("artifact-dangling")).toHaveCount(0);
+  // The prose around the card is still on screen, and the card is between the two parts.
+  const order = await verticalOrder(page, "diagram-card");
+  expect(order.before).toBeLessThanOrEqual(order.card);
+  expect(order.card).toBeLessThan(order.after);
+});
+
+test("the manual control completes a marker the automatic pass could not", async ({
   page,
   request,
 }) => {
   await freshSession(page);
+  // Only the reply is scripted: both automatic repair attempts fall to the fake's default
+  // plain answer, so the turn settles with the marker dangling and the control on it.
   await scriptLlm(request, {
     turns: [
       {
@@ -178,9 +210,27 @@ test("a marker with no call becomes a dangling slot once the turn settles", asyn
 
   await send(page, "画图");
   await expect(page.getByTestId("artifact-dangling")).toBeVisible({ timeout: 20_000 });
-  // The prose around the missing card is still on screen.
   await expect(page.getByText("引用前的文字。", { exact: true })).toBeVisible();
   await expect(page.getByText("引用后的文字。", { exact: true })).toBeVisible();
+
+  // Queue the repair answer now that the turn is over, then press the control.
+  await scriptLlm(request, {
+    turns: [
+      {
+        toolCalls: [
+          { id: "manual_d1", name: "ila_diagram", args: { name: "ghost", source: FLOW, summary: "手动的图" } },
+        ],
+      },
+    ],
+  });
+  await page.getByTestId("artifact-repair").click();
+
+  await expect(page.getByTestId("diagram-card").last()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("artifact-dangling")).toHaveCount(0);
+  // The card is where the marker was: between the two prose parts.
+  const order = await verticalOrder(page, "diagram-card");
+  expect(order.before).toBeLessThanOrEqual(order.card);
+  expect(order.card).toBeLessThan(order.after);
 });
 
 test("a marker whose artifact fails keeps the failure card in place", async ({

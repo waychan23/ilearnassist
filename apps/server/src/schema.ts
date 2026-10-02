@@ -1204,7 +1204,9 @@ export const DDL = `
     session_id TEXT,
     -- The assistant message a chat turn produced, when there is one to point at.
     message_id TEXT,
-    -- chat | title | thread | insight | summary.media — see USAGE_PURPOSES.
+    -- An id from USAGE_PURPOSES (chat, title, thread, insight, summary.media, summary.context,
+    -- preference, artifact) — the array is the list, and this comment names it rather than
+    -- repeating it.
     -- A string rather than a CHECK constraint: the list grows, and a constraint would make a new
     -- purpose a migration instead of an entry in one array.
     purpose TEXT NOT NULL,

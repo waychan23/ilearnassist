@@ -278,7 +278,11 @@ previewed where it is written rather than copied into a preview), and `e2e/diagr
 the listing to assert the tool wrote a file, which is a different claim from a widget having drawn
 something.
 
-There is no write endpoint. Both writers are tools, and a browser for it is a read.
+There is no general write endpoint. Both writers are tools, and a browser for it is a read. The
+one exception is the repair route: `POST /api/sessions/:id/messages/:messageId/artifacts/repair`
+completes a marker an assistant reply left unanswered by invoking the tool the marker names —
+it does not accept artifact content, and it cannot write a diagram the model did not generate
+in that call. See the inline-marker section of `CLAUDE.md` and `apps/server/src/artifactRepair.ts`.
 
 ## Coordinate plotting has a sibling now
 

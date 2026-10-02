@@ -91,6 +91,12 @@ export default {
     dangling: "未找到对应的图表或文件",
     /** The artifact call failed. */
     error: "图表或文件生成失败",
+    /** The control on a dangling slot: generate the missing artifact now. */
+    repair: "补生成",
+    /** The same control while the repair call is in flight. */
+    repairing: "正在补生成…",
+    /** The confirmation before a repair overwrites a file that already exists. */
+    overwriteConfirm: "该路径已存在文件，补生成会覆盖它。继续吗？",
   },
   /**
    * A table's title bar in a reply — the strip above the markdown, not the table itself.
@@ -333,6 +339,7 @@ export default {
       "summary.media": "图片摘要",
       "summary.context": "上下文压缩",
       preference: "用户偏好提取",
+      artifact: "缺失产物补生成",
     },
   },
 
@@ -1857,6 +1864,10 @@ export default {
     MESSAGE_NOT_LAST: "只能删除最后一条消息，请刷新页面后再试。",
     NO_REPLY_TO_REGENERATE: "没有可以重新生成的回复（最后一条不是助手回复，或者它正在等待你的回答）。",
     TURN_IN_PROGRESS: "上一条回复还在生成中，请先停止或等它结束。",
+    ARTIFACT_NOT_FOUND: "找不到这个引用占位符，或者它对应的内容已经生成了。",
+    ARTIFACT_TOOL_UNAVAILABLE: "当前会话没有开启生成这类内容的工具。",
+    ARTIFACT_REPAIR_FAILED: "补生成失败：{detail}。可以稍后重试。",
+    ARTIFACT_EXISTS: "该路径已存在文件，补生成会覆盖它。",
     SESSION_LOCKED: "这个会话正在另一个客户端上编辑，这里暂时只能看。",
     CONTEXT_EMPTY: "当前没有可以压缩的消息。",
     COMPACT_FAILED: "上下文压缩失败：{detail}（仍使用原有上下文，可稍后重试）",

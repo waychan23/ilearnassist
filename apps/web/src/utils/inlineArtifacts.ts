@@ -1,10 +1,9 @@
 import {
-  DIAGRAM_TOOL_NAME,
-  PLOT_TOOL_NAME,
-  WRITE_FILE_TOOL_NAME,
+  artifactCallIdentity,
   isArtifactTool,
-  slugifyName,
-  type FileLocation,
+  matchArtifactMarkers,
+  type ArtifactKind,
+  type ArtifactMarker,
   type ToolCall,
 } from "../api/types";
 import { parseBlockLines, type BlockTokenLine } from "./markdown";
@@ -17,23 +16,14 @@ import { parseBlockLines, type BlockTokenLine } from "./markdown";
  * step's text. Both resolve here to one ordered list of parts — text segments interleaved
  * with artifact slots. Calls that have neither a marker nor a usable offset stay in
  * `legacyCalls` and keep the old above-text placement.
+ *
+ * The marker grammar and the marker↔call identity math are shared (`packages/shared`), so
+ * the server's missing-artifact check and this renderer can never disagree about what a
+ * marker refers to.
  */
 
-export type ArtifactKind = "diagram" | "plot" | "file";
+export type { ArtifactKind, ArtifactMarker };
 export type SlotStatus = "pending" | "running" | "done" | "error" | "dangling";
-
-/** One marker as written in the content, with its char range. */
-export interface ArtifactMarker {
-  kind: ArtifactKind;
-  /** Handle text, trimmed, as the model wrote it. */
-  handle: string;
-  /** File only: the write location named in the marker. */
-  location?: FileLocation;
-  /** Char range of the full marker in the content. */
-  start: number;
-  end: number;
-  startLine: number;
-}
 
 export interface TextSegment {
   kind: "text";
@@ -55,125 +45,6 @@ export interface BuildResult {
   legacyCalls: ToolCall[];
   /** Tool-call ids consumed by an inline slot. */
   consumedCallIds: ReadonlySet<string>;
-}
-
-export interface ArtifactCallIdentity {
-  kind: ArtifactKind;
-  key: string;
-  location?: FileLocation;
-}
-
-const MARKER_SCAN_REGEX = /\[\[artifact:(diagram|plot|file)\/([^\]\n]+?)(?:\?location=(workspace|session))?\]\]/g;
-const FENCE_LINE = /^\s*(`{3,}|~{3,})/;
-
-/** Strip a diagram file extension from a name before it is slugified. */
-function diagramBaseName(handle: string): string {
-  return handle.replace(/\.(mmd|mermaid)$/i, "").trim();
-}
-
-/** Normalize a file handle/path to POSIX form, the way a relative write path is compared. */
-function normalizePath(path: string): string {
-  return path
-    .replace(/\\/g, "/")
-    .replace(/\/{2,}/g, "/")
-    .replace(/^\.\//, "")
-    .trim();
-}
-
-/**
- * Every marker in content, found outside code fences, with character offsets.
- *
- * Fence-aware: marker-like text inside a code block is content and is not returned.
- */
-export function parseArtifactMarkers(content: string): ArtifactMarker[] {
-  const lines = content.split("\n");
-  const markers: ArtifactMarker[] = [];
-  let offset = 0;
-  let fence: "`" | "~" | null = null;
-
-  lines.forEach((line, index) => {
-    const lineStart = offset;
-    offset += line.length + 1;
-
-    const fenceMatch = line.match(FENCE_LINE);
-    if (fenceMatch) {
-      const mark = fenceMatch[1]![0] === "~" ? "~" : "`";
-      if (fence === null) fence = mark;
-      else if (mark === fence) fence = null;
-      return;
-    }
-    if (fence !== null) return;
-
-    for (const match of line.matchAll(MARKER_SCAN_REGEX)) {
-      if (match.index === undefined) continue;
-      const kind = match[1] as ArtifactKind;
-      const handle = match[2]!.trim();
-      const location = match[3] as FileLocation | undefined;
-      const start = lineStart + match.index;
-      markers.push({
-        kind,
-        handle,
-        ...(location ? { location } : {}),
-        start,
-        end: start + match[0].length,
-        startLine: index,
-      });
-    }
-  });
-
-  return markers;
-}
-
-/**
- * The identity an artifact tool call is matched by, or `null` when its input cannot be
- * read or does not name the artifact.
- */
-export function artifactCallIdentity(tc: ToolCall): ArtifactCallIdentity | null {
-  let args: unknown;
-  try {
-    args = JSON.parse(tc.input);
-  } catch {
-    return null;
-  }
-
-  if (tc.name === DIAGRAM_TOOL_NAME) {
-    const name = (args as { name?: unknown }).name;
-    if (typeof name !== "string" || !name.trim()) return null;
-    return { kind: "diagram", key: slugifyName(diagramBaseName(name), "diagram") };
-  }
-  if (tc.name === PLOT_TOOL_NAME) {
-    const name = (args as { name?: unknown }).name;
-    if (typeof name !== "string" || !name.trim()) return null;
-    return { kind: "plot", key: slugifyName(name, "plot") };
-  }
-  if (tc.name === WRITE_FILE_TOOL_NAME) {
-    const path = (args as { path?: unknown }).path;
-    if (typeof path !== "string" || !path.trim()) return null;
-    const location = (args as { location?: unknown }).location;
-    return {
-      kind: "file",
-      key: normalizePath(path),
-      ...(location === "session" || location === "workspace" ? { location } : {}),
-    };
-  }
-  return null;
-}
-
-/** The identity a marker is matched by. */
-export function markerIdentity(marker: ArtifactMarker): {
-  key: string;
-  location?: FileLocation;
-} {
-  if (marker.kind === "diagram") {
-    return { key: slugifyName(diagramBaseName(marker.handle), "diagram") };
-  }
-  if (marker.kind === "plot") {
-    return { key: slugifyName(marker.handle, "plot") };
-  }
-  return {
-    key: normalizePath(marker.handle),
-    ...(marker.location ? { location: marker.location } : {}),
-  };
 }
 
 /** Table-internal token types. */
@@ -308,56 +179,34 @@ export function buildInlineParts(
   toolCalls: readonly ToolCall[],
   options: { settled: boolean }
 ): BuildResult {
-  const markers = parseArtifactMarkers(content);
+  const matched = matchArtifactMarkers(content, toolCalls);
+  const markerSlots = matched.matches.map(({ marker, call }) => ({
+    marker,
+    ...(call ? { tc: call } : {}),
+  }));
 
-  interface ArtifactEntry {
-    tc: ToolCall;
-    identity: ArtifactCallIdentity | null;
-  }
-  const entries: ArtifactEntry[] = toolCalls
-    .filter((tc) => isArtifactTool(tc.name))
-    .map((tc) => ({ tc, identity: artifactCallIdentity(tc) }));
-
-  const markerMatched = new Set<string>();
-  const markerSlots: Array<{ marker: ArtifactMarker; tc?: ToolCall }> = [];
-
-  for (const marker of markers) {
-    const mid = markerIdentity(marker);
-    const entry = entries.find((e): boolean => {
-      const id = e.identity;
-      if (!id || markerMatched.has(e.tc.id)) return false;
-      if (id.kind !== marker.kind || id.key !== mid.key) return false;
-      if (marker.kind === "file" && marker.location && id.location !== marker.location) {
-        return false;
-      }
-      return true;
-    });
-    if (entry) markerMatched.add(entry.tc.id);
-    markerSlots.push({ marker, ...(entry ? { tc: entry.tc } : {}) });
-  }
-
-  const consumedCallIds = new Set(markerMatched);
+  const consumedCallIds = new Set(matched.consumedCallIds);
   const offsetSlots: Array<{ tc: ToolCall; position: number; order: number }> = [];
   const legacyCalls: ToolCall[] = [];
 
-  for (const entry of entries) {
-    if (markerMatched.has(entry.tc.id)) continue;
-    const offset = entry.tc.contentOffset;
+  for (const tc of toolCalls) {
+    if (!isArtifactTool(tc.name) || consumedCallIds.has(tc.id)) continue;
+    const offset = tc.contentOffset;
     if (
-      entry.identity &&
+      artifactCallIdentity(tc) &&
       typeof offset === "number" &&
       Number.isFinite(offset) &&
       offset >= 0 &&
       offset <= content.length
     ) {
-      consumedCallIds.add(entry.tc.id);
+      consumedCallIds.add(tc.id);
       offsetSlots.push({
-        tc: entry.tc,
+        tc,
         position: snapToBlockBoundary(content, offset),
         order: offsetSlots.length,
       });
     } else {
-      legacyCalls.push(entry.tc);
+      legacyCalls.push(tc);
     }
   }
 

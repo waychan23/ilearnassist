@@ -5,13 +5,7 @@ import { api } from "../../api/client";
 import { chartTheme, documentThemeReader, shortDayLabel, type ChartConfig } from "../../utils/charts";
 import { useTheme } from "../../composables/theme";
 import { formatTokens } from "../../utils/format";
-import type {
-  UsageBucket,
-  UsageQuery,
-  UsageSessionRow,
-  UsageStats,
-  UsageTotals,
-} from "../../api/types";
+import { USAGE_PURPOSES, type UsageBucket, type UsageQuery, type UsageSessionRow, type UsageStats, type UsageTotals } from "../../api/types";
 import Icon from "../Icon.vue";
 import UsageChart from "./UsageChart.vue";
 
@@ -148,8 +142,11 @@ function label(bucket: UsageBucket): string {
  * server) shows itself rather than a blank, which is the same rule `label` follows.
  */
 function purposeLabel(key: string): string {
-  const known = ["chat", "title", "thread", "insight", "summary.media"];
-  return known.includes(key) ? t(`usage.purpose.${key}`) : key;
+  // The runtime list rather than a hand-kept copy: it is the one place a purpose id exists,
+  // and a local list is how a purpose added on the server showed as its raw id in the panel.
+  return (USAGE_PURPOSES as readonly string[]).includes(key)
+    ? t(`usage.purpose.${key}`)
+    : key;
 }
 
 /**

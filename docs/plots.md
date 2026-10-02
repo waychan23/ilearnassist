@@ -138,6 +138,12 @@ All of them throw before `ctx.save`, which is the half that matters most: the up
 name, so a refused call that had already reached the save would replace the figure the panel
 holds with nothing.
 
+A figure a reply referenced with `[[artifact:plot/<name>]]` but never produced is completed the
+same way a diagram is: the repair pass calls `ila_plot` with the marker's own name and a
+spec generated from the reply, so the figure goes through this same validator and row. The
+marker is the identity; the name is pinned, not negotiated. See the inline-marker section of
+`CLAUDE.md`.
+
 ## The row
 
 `session_plots`, and the table's shape applied to a third kind: `id`, `session_id`, `thread_id`,
