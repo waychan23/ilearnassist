@@ -1,7 +1,7 @@
 {
   "name": "@ilearnassist/desktop",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "description": "Desktop control panel: starts the ilearnassist server and opens the app.",
   "license": "MIT",
