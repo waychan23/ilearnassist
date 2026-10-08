@@ -64,13 +64,18 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-function provider(capabilities: ModelCapability[] = [], baseURL = llm.baseURL): ProviderRecord {
+function provider(
+  capabilities: ModelCapability[] = [],
+  baseURL = llm.baseURL,
+  overrides: Partial<ProviderRecord> = {}
+): ProviderRecord {
   return {
     id: "fake",
     name: "Fake",
     baseURL,
     apiKey: "test-key",
     models: [{ id: "r1", modelId: "fake-model", name: "fake-model", capabilities }],
+    ...overrides,
   };
 }
 
@@ -98,6 +103,10 @@ interface RunOptions {
   baseURL?: string;
   /** The turn's clock. Fixed by default so a prompt assertion does not depend on today. */
   clock?: TurnClock;
+  /** Request-header overrides on the provider record (User-Agent, session header name). */
+  providerOverrides?: Partial<ProviderRecord>;
+  /** The conversation's provider-facing id, forwarded to the provider's session header. */
+  providerSessionId?: string;
 }
 
 /**
@@ -115,7 +124,7 @@ async function run(options: RunOptions) {
   llm.setTurns(options.turns);
   const events: ChatStreamEvent[] = [];
   const result = await runAgentStream({
-    provider: provider(options.capabilities ?? [], options.baseURL),
+    provider: provider(options.capabilities ?? [], options.baseURL, options.providerOverrides),
     modelId: "fake-model",
     workspace: {
       id: "w1",
@@ -136,6 +145,7 @@ async function run(options: RunOptions) {
     // source's path from the layout, so it needs the root it belongs to.
     user: userLayout(dataLayout(scratch), "tester"),
     sessionId: "s1",
+    providerSessionId: options.providerSessionId,
     sessionDirPath: join(scratch, "ws", "sessions", "s1"),
     writeLocation: options.writeLocation ?? "session",
     smartContextGuidance: options.smartContextGuidance,
@@ -1720,5 +1730,66 @@ describe("running out of steps", () => {
     expect(result.content).toBe("先看一眼。\n\n需要你定一下：");
     expect(result.content).toBe(streamedOf(events));
     expect(result.content).not.toContain("ran out of steps");
+  });
+});
+
+/**
+ * The provider request headers, asserted where they actually leave the process: the fake
+ * server's view of `req.headers`. `providerRequestHeaders` is unit-tested separately; this is
+ * the half that proves `@langchain/openai`'s client actually sends them.
+ */
+describe("runAgentStream — provider request headers", () => {
+  it("sends nothing of ours when the provider configured no headers", async () => {
+    await run({ turns: [{ content: "hi" }] });
+
+    // The SDK's own User-Agent goes out untouched — sending ours is opt-in, and this is the
+    // behaviour every provider had before the feature existed.
+    const userAgent = llm.headers()[0]!["user-agent"] ?? "";
+    expect(userAgent).not.toContain("ilearnassist");
+  });
+
+  it("sends the provider's own User-Agent when one is configured", async () => {
+    await run({
+      turns: [{ content: "hi" }],
+      providerOverrides: { userAgent: "my-coding-agent/2.0" },
+    });
+
+    expect(llm.headers()[0]!["user-agent"]).toBe("my-coding-agent/2.0");
+  });
+
+  it("sends the conversation id under the provider's header name", async () => {
+    await run({
+      turns: [{ content: "hi" }],
+      providerOverrides: { sessionHeader: "x-opencode-session" },
+      providerSessionId: "ext-123",
+    });
+
+    expect(llm.headers()[0]!["x-opencode-session"]).toBe("ext-123");
+  });
+
+  it("sends no session header when none is configured or no id is at hand", async () => {
+    await run({ turns: [{ content: "hi" }], providerSessionId: "ext-123" });
+    expect(llm.headers()[0]!["x-opencode-session"]).toBeUndefined();
+
+    llm.reset();
+    await run({
+      turns: [{ content: "hi" }],
+      providerOverrides: { sessionHeader: "x-opencode-session" },
+    });
+    expect(llm.headers()[0]!["x-opencode-session"]).toBeUndefined();
+  });
+
+  it("carries the same id on every step of a multi-step turn", async () => {
+    await run({
+      turns: [
+        { content: "let me look", toolCalls: [{ id: "c1", name: "no_such_tool", args: {} }] },
+        { content: "done" },
+      ],
+      providerOverrides: { sessionHeader: "x-session" },
+      providerSessionId: "ext-abc",
+    });
+
+    expect(llm.headers().length).toBe(2);
+    expect(llm.headers().map((h) => h["x-session"])).toEqual(["ext-abc", "ext-abc"]);
   });
 });

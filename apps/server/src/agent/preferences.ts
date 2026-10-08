@@ -2,6 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage, type AIMessageChunk } from "@langchain/core/messages";
 import type { MessageUsage, UserPreference } from "@ilearnassist/shared";
 import { usageOfChunks } from "./callUsage.js";
+import { providerClientOptions } from "./providerHeaders.js";
 import { reasoningModelKwargs } from "./reasoning.js";
 import type { ProviderRecord } from "../db.js";
 import type { OutOfBandReasoningSetting } from "../config.js";
@@ -29,6 +30,8 @@ const TIMEOUT_MS = 60_000;
 export interface ExtractPreferenceInput {
   provider: ProviderRecord | undefined;
   modelId: string;
+  /** The conversation's provider-facing id, for the provider's custom session header. */
+  providerSessionId?: string;
   /** The passage the user pointed at, verbatim. */
   text: string;
   /**
@@ -64,7 +67,9 @@ export async function extractPreference(input: ExtractPreferenceInput): Promise<
   const llm = new ChatOpenAI({
     model,
     apiKey: provider.apiKey,
-    configuration: { baseURL: provider.baseURL },
+    configuration: providerClientOptions(provider, {
+      providerSessionId: input.providerSessionId,
+    }),
     // Extraction is closer to classification than to writing: the rule should come out the same
     // way every time.
     temperature: 0.2,

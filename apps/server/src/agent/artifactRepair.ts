@@ -3,6 +3,7 @@ import { HumanMessage, SystemMessage, type AIMessageChunk } from "@langchain/cor
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import type { MessageUsage } from "@ilearnassist/shared";
 import { usageOfChunks } from "./callUsage.js";
+import { providerClientOptions } from "./providerHeaders.js";
 import type { ProviderRecord } from "../db.js";
 import type { OutOfBandReasoningSetting } from "../config.js";
 import { reasoningModelKwargs } from "./reasoning.js";
@@ -39,6 +40,8 @@ const TIMEOUT_MS = 60_000;
 export interface ArtifactRepairModelInput {
   provider: ProviderRecord | undefined;
   modelId: string;
+  /** The conversation's provider-facing id, for the provider's custom session header. */
+  providerSessionId?: string;
   /**
    * Whether this call may run chain-of-thought. Defaults to `auto` — see
    * `OutOfBandReasoningSetting`. Its own switch (`ILA_ARTIFACT_REASONING`) rather than the
@@ -79,7 +82,9 @@ export function makeArtifactRepairer(input: ArtifactRepairModelInput): ArtifactR
     const llm = new ChatOpenAI({
       model,
       apiKey: provider.apiKey,
-      configuration: { baseURL: provider.baseURL },
+      configuration: providerClientOptions(provider, {
+        providerSessionId: input.providerSessionId,
+      }),
       temperature: 0.3,
       maxTokens: MAX_OUTPUT_TOKENS,
       maxRetries: 0,

@@ -65,6 +65,16 @@ providers:
   #
   # Model ids are the vendors' own and do change. Correcting one is a console edit
   # (控制台 → 模型服务商) — no rebuild.
+  #
+  # Two optional request-header keys ride a provider. Both are opt-in: omit them and the
+  # SDK's own headers go out unchanged.
+  #   userAgent     — the User-Agent every request sends. A blank row in the console saves
+  #                   as `ilearnassist/1.0`.
+  #   sessionHeader — a header whose value is the conversation's own opaque session id,
+  #                   stable for the life of the conversation (sessions.provider_session_id).
+  #                   The name is required and must be a valid HTTP header name, not one of
+  #                   the reserved names (authorization, content-type, host, user-agent, …).
+  # Both are also editable per provider in 控制台 → 模型服务商, added one at a time.
   # ---------------------------------------------------------------------------
 
   # ---- DeepSeek ------------------------------------------------------------
@@ -234,6 +244,24 @@ providers:
   #   models:
   #     - id: llama3.1
   #       name: Llama 3.1
+
+  # ---- OpenCode Go ---------------------------------------------------------
+  # OpenAI-compatible endpoint: https://opencode.ai/zen/go/v1 (only the models whose
+  # documented AI SDK package is `@ai-sdk/openai-compatible`; the `/responses` and
+  # `/messages` models are not spoken by this app).
+  #
+  # Go asks a client to identify itself and to send a stable per-conversation id — the
+  # two keys below answer exactly that. `sessionHeader` is the header name Go documents.
+  # - id: opencode-go
+  #   name: OpenCode Go
+  #   baseURL: https://opencode.ai/zen/go/v1
+  #   apiKey: ${OPENCODE_GO_API_KEY}
+  #   userAgent: ilearnassist/1.0
+  #   sessionHeader: x-opencode-session
+  #   models:
+  #     - id: kimi-k3
+  #       name: Kimi K3
+  #       capabilities: [tool_use, reasoning]
 
 # ----------------------------------------------------------------------------
 # Document parsing (PDF / Word / Excel / PowerPoint / OpenDocument).

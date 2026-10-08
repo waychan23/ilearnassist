@@ -1036,6 +1036,19 @@ const en: typeof MessageSchema = {
     apiKeyUnset: "Not configured",
     apiKeyNote:
       "For security the server never returns the key, so leaving this blank keeps the current one.",
+    requestHeaders: "Request headers",
+    requestHeadersHint: "Optional. Only the headers you add are sent with each request.",
+    addHeader: "Add a header",
+    removeHeader: "Remove this header",
+    header: {
+      userAgent: "User-Agent",
+      userAgentHint: "Sent with every request. Leave blank to use the default, {value}.",
+      userAgentInvalid: "Must be a single line of at most 512 characters.",
+      session: "Session",
+      sessionHint:
+        "Name the header yourself; its value is the conversation's own generated, stable session ID.",
+      sessionInvalid: "Not a valid HTTP header name, or one of the reserved names.",
+    },
     models: "Models",
     addModel: "Add a model",
     modelNoteBefore: "Both the context length and the max output are in ",
@@ -1451,6 +1464,8 @@ const en: typeof MessageSchema = {
     BASE_URL_REQUIRED: "A base URL is required.",
     ONLY_PROVIDER: "You cannot delete the only provider.",
     DEFAULT_PROVIDER: "This is the default provider. Choose a different default first.",
+    INVALID_HEADER_NAME: "That session header name is not a valid, unreserved HTTP header name.",
+    INVALID_HEADER_VALUE: "That User-Agent is not valid — it must be a single line of at most 512 characters.",
     PARSER_NOT_FOUND: "That parser no longer exists.",
     UNKNOWN_PARSER_KIND: "Unknown parser kind: {kind}",
     UNKNOWN_POLICY: "Unknown parsing policy: {policy}",

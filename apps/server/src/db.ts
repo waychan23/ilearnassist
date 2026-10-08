@@ -789,6 +789,8 @@ interface SessionRow {
   settings: string | null;
   /** The user's own note about this conversation. Always written; empty means none. */
   description: string;
+  /** The provider-facing id sent under `providers.session_header`. NULL predates the column. */
+  provider_session_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -927,6 +929,10 @@ interface ProviderRow {
   name: string;
   base_url: string;
   api_key: string | null;
+  /** NULL means "no user-agent header of ours is attached". */
+  user_agent: string | null;
+  /** NULL means "send no conversation-id header". */
+  session_header: string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -961,6 +967,17 @@ export interface ProviderRecord {
   name: string;
   baseURL: string;
   apiKey?: string;
+  /**
+   * The User-Agent to send. Absent means no user-agent header of ours is attached.
+   *
+   * Optional like `apiKey`, and for the same reason: a record built by a test or an embedder
+   * that has nothing to say about request headers keeps working and sends none.
+   */
+  userAgent?: string;
+  /**
+   * The header a conversation's `providerSessionId` is sent under. Absent means no such header.
+   */
+  sessionHeader?: string;
   models: ProviderModel[];
 }
 
@@ -2280,6 +2297,11 @@ export interface AppDb {
    * The Copilot fields are a snapshot the caller supplies, not a reference this resolves: the
    * route has already read the Copilot through `getCopilotForUser`, and copying here is what
    * makes the conversation independent of it. Pass empty values for a Copilotless session.
+   *
+   * Also mints the conversation's `provider_session_id` — the opaque value a provider's custom
+   * session header carries. It is generated here rather than at first request so the id a
+   * conversation is born with is the id it always sends; see `providerSessionIdFor` for the
+   * rows that predate the column.
    */
   createSession(input: {
     id: string;
@@ -2379,6 +2401,16 @@ export interface AppDb {
    * guard is genuinely upstream rather than merely inconvenient here.
    */
   touchSession(id: string): void;
+
+  /**
+   * The provider-facing id for a conversation, minting one if the row does not have it.
+   *
+   * Unscoped like `touchSession` above: every caller reaches it after a `...ForUser` read has
+   * already resolved the session. New sessions carry one from `createSession`; this exists for
+   * rows written before the column existed, and it is idempotent — a second caller reads what
+   * the first minted rather than minting another. `undefined` means no session has that id.
+   */
+  providerSessionIdFor(id: string): string | undefined;
 
   /*
    * Session write locks. All three are owner-scoped, and the two writes assert `ForUser` in
@@ -3109,10 +3141,25 @@ export interface AppDb {
 
   listProviders(): ProviderRecord[];
   getProvider(id: string): ProviderRecord | undefined;
-  createProvider(input: { id: string; name: string; baseURL: string; apiKey?: string }): ProviderRecord;
+  createProvider(input: {
+    id: string;
+    name: string;
+    baseURL: string;
+    apiKey?: string;
+    userAgent?: string;
+    sessionHeader?: string;
+  }): ProviderRecord;
   updateProvider(
     id: string,
-    input: { name?: string; baseURL?: string; apiKey?: string }
+    input: {
+      name?: string;
+      baseURL?: string;
+      apiKey?: string;
+      /** Absent keeps the stored value; `""` removes the user-agent header. */
+      userAgent?: string;
+      /** Absent keeps the stored name; `""` removes the session header. */
+      sessionHeader?: string;
+    }
   ): ProviderRecord | undefined;
   /**
    * Marks the provider deleted, and its models with it, in one transaction.
@@ -3500,6 +3547,20 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     ensureColumn(db, "plan_nodes", "start_message_id", "start_message_id TEXT");
     ensureColumn(db, "plan_nodes", "skipped_at", "skipped_at TEXT");
     ensureColumn(db, "plan_nodes", "skipped_message_id", "skipped_message_id TEXT");
+
+    /*
+     * Provider request headers, and the per-conversation id one of them carries.
+     *
+     * Both provider columns are nullable with nothing to backfill: NULL `user_agent` is "send
+     * the default", which is what every provider did before the column existed, and NULL
+     * `session_header` is "send no session header". `provider_session_id` is different in one
+     * respect — a session must *have* a stable value before its first request — so new sessions
+     * mint one in `createSession` and rows that predate the column are filled at that moment
+     * (`ensureProviderSessionId`).
+     */
+    ensureColumn(db, "providers", "user_agent", "user_agent TEXT");
+    ensureColumn(db, "providers", "session_header", "session_header TEXT");
+    ensureColumn(db, "sessions", "provider_session_id", "provider_session_id TEXT");
   }).immediate();
 
   const now = () => new Date().toISOString();
@@ -4155,9 +4216,23 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   const stmtGetSession = db.prepare("SELECT * FROM sessions WHERE id = ?");
   const stmtCreateSession = db.prepare(
     `INSERT INTO sessions (id, workspace_id, copilot_id, copilot_name, system_prompt, all_tools,
-       tools, title, title_source, settings, description, created_at, updated_at)
+       tools, title, title_source, settings, description, provider_session_id, created_at, updated_at)
      VALUES (@id, @workspaceId, @copilotId, @copilotName, @systemPrompt, @allTools,
-       @tools, @title, @titleSource, @settings, @description, @createdAt, @updatedAt)`
+       @tools, @title, @titleSource, @settings, @description, @providerSessionId, @createdAt, @updatedAt)`
+  );
+  /*
+   * The lazy half of `sessions.provider_session_id`.
+   *
+   * `WHERE provider_session_id IS NULL` is the whole concurrency control, the
+   * `setAutoTitleForUser` shape: two racing callers cannot write two different ids, because
+   * only the first statement's condition is still true when it runs. Reading after the write
+   * (rather than trusting the minted value) is what makes the loser answer with the winner's.
+   */
+  const stmtMintProviderSessionId = db.prepare(
+    "UPDATE sessions SET provider_session_id = ? WHERE id = ? AND provider_session_id IS NULL"
+  );
+  const stmtGetProviderSessionId = db.prepare(
+    "SELECT provider_session_id FROM sessions WHERE id = ?"
   );
   const stmtUpdateSessionForUser = db.prepare(
     `UPDATE sessions SET title = @title, title_source = @titleSource, settings = @settings,
@@ -5151,8 +5226,8 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
   );
   const stmtGetProvider = db.prepare("SELECT * FROM providers WHERE id = ? AND deleted_at IS NULL");
   const stmtCreateProvider = db.prepare(
-    `INSERT INTO providers (id, name, base_url, api_key, sort_order, created_at, updated_at)
-     VALUES (@id, @name, @baseURL, @apiKey, @sortOrder, @createdAt, @updatedAt)`
+    `INSERT INTO providers (id, name, base_url, api_key, user_agent, session_header, sort_order, created_at, updated_at)
+     VALUES (@id, @name, @baseURL, @apiKey, @userAgent, @sessionHeader, @sortOrder, @createdAt, @updatedAt)`
   );
   const stmtSoftDeleteProvider = db.prepare(
     "UPDATE providers SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL"
@@ -5219,6 +5294,9 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     name: row.name,
     baseURL: row.base_url,
     apiKey: row.api_key ?? undefined,
+    // Both NULL columns read as absent, which is what every reader treats as "no override".
+    userAgent: row.user_agent ?? undefined,
+    sessionHeader: row.session_header ?? undefined,
     models: modelsFor(row.id),
   });
 
@@ -5781,6 +5859,10 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         titleSource: input.titleSource ?? "auto",
         description: input.description ?? "",
         settings: JSON.stringify(input.settings ?? {}),
+        // The conversation's provider-facing id, minted with the row. An opaque UUID rather
+        // than anything derived from the session id: the provider needs a stable handle and
+        // nothing else, and the local id is not its business.
+        providerSessionId: randomUUID(),
         createdAt: ts,
         updatedAt: ts,
       });
@@ -5840,6 +5922,20 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
     },
     touchSession(id) {
       stmtTouchSession.run(now(), id);
+    },
+    providerSessionIdFor(id) {
+      const read = () => {
+        const row = stmtGetProviderSessionId.get(id) as
+          | { provider_session_id: string | null }
+          | undefined;
+        return row?.provider_session_id ?? undefined;
+      };
+      const known = read();
+      if (known) return known;
+      // No row at all vs a row without an id: both read the same way, and an UPDATE against a
+      // missing id is a harmless no-op, so the mint is attempted either way.
+      stmtMintProviderSessionId.run(randomUUID(), id);
+      return read();
     },
 
     acquireSessionLock({ sessionId, userId, clientId, ttlSeconds, now: at }) {
@@ -6810,6 +6906,8 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
         name: input.name,
         baseURL: input.baseURL,
         apiKey: input.apiKey ?? null,
+        userAgent: input.userAgent || null,
+        sessionHeader: input.sessionHeader || null,
         sortOrder: next,
         createdAt: ts,
         updatedAt: ts,
@@ -6821,11 +6919,14 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
       const existing = stmtGetProvider.get(id) as ProviderRow | undefined;
       if (!existing) return undefined;
       db.prepare(
-        "UPDATE providers SET name = ?, base_url = ?, api_key = ?, updated_at = ? WHERE id = ?"
+        "UPDATE providers SET name = ?, base_url = ?, api_key = ?, user_agent = ?, session_header = ?, updated_at = ? WHERE id = ?"
       ).run(
         input.name?.trim() || existing.name,
         input.baseURL?.trim() || existing.base_url,
         input.apiKey === undefined ? existing.api_key : input.apiKey || null,
+        // The same absent/empty convention `apiKey` uses: absent keeps, empty clears to NULL.
+        input.userAgent === undefined ? existing.user_agent : input.userAgent || null,
+        input.sessionHeader === undefined ? existing.session_header : input.sessionHeader || null,
         now(),
         id
       );
@@ -6950,6 +7051,10 @@ export interface SeedProviderDef {
   name: string;
   baseURL: string;
   apiKey?: string;
+  /** Absent means no user-agent header of ours. */
+  userAgent?: string;
+  /** Absent means no conversation-id header. */
+  sessionHeader?: string;
   models: { id: string; name: string; capabilities?: ModelCapability[] }[];
 }
 
@@ -7011,7 +7116,14 @@ export function seedFromConfig(
   for (const p of input.providers) {
     // The YAML `id` becomes the record id so `defaultProvider: deepseek` stays valid
     // and re-seeding is idempotent.
-    db.createProvider({ id: p.id, name: p.name, baseURL: p.baseURL, apiKey: p.apiKey });
+    db.createProvider({
+      id: p.id,
+      name: p.name,
+      baseURL: p.baseURL,
+      apiKey: p.apiKey,
+      userAgent: p.userAgent,
+      sessionHeader: p.sessionHeader,
+    });
     for (const m of p.models) {
       db.createModel({
         id: newId(),

@@ -86,10 +86,11 @@ snake_case, mapped to camelCase objects in code:
   system_prompt, tools (JSON), settings (JSON), visibility (`private` | `public`),
   timestamps
 - `sessions` — id, workspace_id, copilot_id (FK, `SET NULL`, nullable), copilot_name,
-  system_prompt, tools (JSON), title, title_source, settings (JSON), description, timestamps
+  system_prompt, tools (JSON), title, title_source, settings (JSON), description,
+  provider_session_id, timestamps
 - `messages` — id, session_id, role, content, reasoning, tool_calls (JSON),
   attachments (JSON), usage (JSON), created_at
-- `providers` — id, name, base_url, api_key, sort_order, timestamps
+- `providers` — id, name, base_url, api_key, user_agent, session_header, sort_order, timestamps
 - `models` — id, provider_id (FK, CASCADE), model_id, name, context_window,
   max_output, capabilities (JSON), sort_order
 - `document_parsers` — id, name, kind, base_url, api_key, enabled, sort_order, timestamps
@@ -913,10 +914,20 @@ an image attached several turns ago is still visible to a vision model.
 assistant message so the window always opens on a user turn.
 
 The model is built by `model.ts` as a `ChatOpenAI` with
-`{ model, apiKey, configuration: { baseURL } }`, which is what makes it
-OpenAI-compatible with DeepSeek, OpenAI, Ollama, etc. Streaming is always on.
-Generation parameters (`temperature`, `topP`, `maxTokens`) are passed through
-only when explicitly set, so unset values keep ChatOpenAI's own defaults.
+`{ model, apiKey, configuration: providerClientOptions(provider, …) }`, which is what makes it
+OpenAI-compatible with DeepSeek, OpenAI, Ollama, etc. Streaming is always on. Generation
+parameters (`temperature`, `topP`, `maxTokens`) are passed through only when explicitly set, so
+unset values keep ChatOpenAI's own defaults.
+
+`agent/providerHeaders.ts` is the one place a provider record becomes the request's identity.
+Both headers are **opt-in**: a provider with a `userAgent` sends that `User-Agent` on every
+request, and one that names a `sessionHeader` sends that header with the conversation's
+`sessions.provider_session_id`. A provider that configures neither sends nothing of ours, and
+the SDK's own headers go out as before. Configured headers ride `configuration.fetch` rather
+than `configuration.defaultHeaders`, because `@langchain/openai` replaces a supplied
+User-Agent with its own SDK string on that path; the fetch wrapper is the last layer before
+the wire. All eight model constructions go through this — the main loop and every out-of-band
+pass — so one conversation presents one id to its provider.
 
 ### Uploaded files (`attachments.ts`)
 
@@ -1230,6 +1241,16 @@ Provider responses **never** include `apiKey` — only `hasApiKey: boolean`. `PU
 treats an absent `apiKey` field as "leave unchanged" (an empty string clears it),
 which is what lets the UI round-trip a provider whose key it cannot read.
 Deleting the last provider or the current default returns 409.
+
+`userAgent` and `sessionHeader` are the two request-header fields, added one at a time in the
+console, and unlike the key they do round-trip: `null` means "not added", while a stored string
+is sent verbatim. The same absent/empty contract holds on `PUT` — absent keeps, `""` removes —
+because the console always sends both fields and an empty one is how it removes a header. A
+name that is not an HTTP token, one of the reserved
+names (`authorization`, `content-type`, `host`, `user-agent`, …) or a User-Agent that spans
+lines is refused with `INVALID_HEADER_NAME` / `INVALID_HEADER_VALUE`, and `validateConfig`
+applies the same checks to `config.yaml` at boot so a seeded typo fails loudly rather than at
+the first turn. See `agent/providerHeaders.ts`.
 
 The two endpoints that run a turn share `turnContext()` — provider, model and tool set,
 resolved identically — and `finishTurn()` — persist the assistant message, emit

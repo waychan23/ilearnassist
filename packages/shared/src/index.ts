@@ -2676,6 +2676,13 @@ export const API_ERROR_CODES = [
   "BASE_URL_REQUIRED",
   "ONLY_PROVIDER",
   "DEFAULT_PROVIDER",
+  // The provider's custom session header is not a usable HTTP header name: not a token, or one
+  // of the names the request machinery owns (`authorization`, `content-type`, `host`, …). See
+  // `isValidProviderHeaderName`.
+  "INVALID_HEADER_NAME",
+  // The User-Agent override carries CR/LF or is past the length cap. A header value is a single
+  // line by definition, so this is refused rather than stripped.
+  "INVALID_HEADER_VALUE",
   "PARSER_NOT_FOUND",
   "UNKNOWN_PARSER_KIND",
   "UNKNOWN_POLICY",
@@ -4255,6 +4262,74 @@ export interface SessionLockRelease {
   released: boolean;
 }
 
+/**
+ * The User-Agent a blank `user-agent` row saves as in the console.
+ *
+ * Shared because the console's hint, its blank-row defaulting and the server's validation are
+ * readers of one string. The header itself is **opt-in**: a provider with no `userAgent` sends
+ * no header of ours, and the SDK's own name goes out as it did before the field existed.
+ * OpenCode Go is the reason the value is spelled out — its docs ask a coding agent to identify
+ * itself rather than arrive as a generic SDK.
+ */
+export const DEFAULT_PROVIDER_USER_AGENT = "ilearnassist/1.0";
+
+/** The longest User-Agent override accepted, in characters. */
+export const MAX_PROVIDER_USER_AGENT_LENGTH = 512;
+
+/**
+ * Header names the custom session header may never use.
+ *
+ * The SDK merges these default headers after its own, so a user-supplied value wins. Two names
+ * make that a bug rather than a customization: `authorization` would replace the API key the
+ * request is authenticated with, and `user-agent` would contradict the other header this
+ * feature writes. The rest are the request's own envelope — framing and connection management
+ * are not an administrator's to redefine.
+ */
+export const RESERVED_PROVIDER_HEADER_NAMES = [
+  "authorization",
+  "content-length",
+  "content-type",
+  "host",
+  "user-agent",
+  "accept",
+  "accept-encoding",
+  "connection",
+  "cookie",
+  "transfer-encoding",
+] as const;
+
+/** RFC 9110 token — the only thing a header name may be. */
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Whether a name may be used as a provider's custom session header.
+ *
+ * One function for both sides of the wire: the console refuses a bad name before Save, and the
+ * route answers `INVALID_HEADER_NAME` for a hand-written request, so "the form would not let
+ * me" is never the only guard.
+ */
+export function isValidProviderHeaderName(name: string): boolean {
+  // Checked before the trim, so a name cannot smuggle a line break in and have it shaved off.
+  if (/[\r\n]/.test(name)) return false;
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 256 || !HEADER_NAME_RE.test(trimmed)) return false;
+  return !(RESERVED_PROVIDER_HEADER_NAMES as readonly string[]).includes(trimmed.toLowerCase());
+}
+
+/**
+ * Whether a User-Agent override is sendable. An empty string is not a value — it is how the
+ * route spells "remove this header" — so callers only reach this with the non-empty text they
+ * mean to send.
+ */
+export function isValidProviderUserAgent(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.length > 0 &&
+    trimmed.length <= MAX_PROVIDER_USER_AGENT_LENGTH &&
+    !/[\r\n]/.test(trimmed)
+  );
+}
+
 /** Provider metadata exposed to the client (never includes the apiKey). */
 export interface ProviderConfig {
   id: string;
@@ -4262,6 +4337,20 @@ export interface ProviderConfig {
   baseURL: string;
   models: ProviderModel[];
   hasApiKey: boolean;
+  /**
+   * The User-Agent to send, or `null` for no user-agent header of ours at all.
+   *
+   * Not a secret, unlike `apiKey`, so it round-trips: the console needs the stored value to
+   * edit it, and `null` is how it knows whether the header has been added.
+   */
+  userAgent: string | null;
+  /**
+   * The header a request's per-conversation ID is sent under, or `null` for no such header.
+   *
+   * The *value* never appears here or anywhere on the wire: it is generated and stored per
+   * conversation, and only the provider ever sees it.
+   */
+  sessionHeader: string | null;
 }
 
 /**
@@ -4570,6 +4659,10 @@ export interface CreateProviderInput {
   baseURL: string;
   apiKey?: string;
   models?: ProviderModelInput[];
+  /** The User-Agent to send. Absent or empty means no user-agent header of ours. */
+  userAgent?: string;
+  /** The header a conversation's provider session ID rides. Absent or empty means none. */
+  sessionHeader?: string;
 }
 
 export interface UpdateProviderInput {
@@ -4578,6 +4671,14 @@ export interface UpdateProviderInput {
   /** Omit (or leave empty) to keep the stored key unchanged. */
   apiKey?: string;
   models?: ProviderModelInput[];
+  /**
+   * The User-Agent to send. Absent leaves the stored one alone; empty removes the header.
+   */
+  userAgent?: string;
+  /**
+   * The session-ID header name. Absent leaves the stored one alone; empty removes it.
+   */
+  sessionHeader?: string;
 }
 
 /**

@@ -158,7 +158,7 @@ function onDefaultModelChange(e: Event): void {
         </div>
       </div>
       <div class="row-actions">
-        <button class="btn small" @click="openEdit(p)">{{ t("common.edit") }}</button>
+        <button class="btn small" data-testid="provider-edit" @click="openEdit(p)">{{ t("common.edit") }}</button>
         <button class="icon-btn danger" :title="t('common.delete')" @click="onDelete(p)"><Icon name="trash" /></button>
       </div>
     </div>

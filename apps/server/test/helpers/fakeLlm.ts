@@ -144,6 +144,13 @@ export interface FakeLlm {
   /** Bodies of every `/chat/completions` request received, oldest first. */
   requests(): Record<string, unknown>[];
   /**
+   * Headers of every `/chat/completions` request, index-aligned with `requests()` and lowercased.
+   *
+   * The provider-header feature's evidence: which User-Agent and session header actually left
+   * the process, as seen by the other end.
+   */
+  headers(): Record<string, string>[];
+  /**
    * The subset of `requests()` that was answered with an HTTP error.
    *
    * The same objects, by identity, so a caller can skip them: a test about what a *provider*
@@ -284,6 +291,14 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
   let matches: FakeNonStreamingMatch[] = options.matches ?? [];
   const requireReasoning = options.requireReasoning === true;
   const seen: Record<string, unknown>[] = [];
+  /**
+   * The request headers, index-aligned with `seen`.
+   *
+   * A parallel array rather than a field on the bodies: ~30 assertions read `requests()[i]` as
+   * a chat-completion body, and widening that shape would touch every one of them for a
+   * fact none of them asked about.
+   */
+  const seenHeaders: Record<string, string>[] = [];
   /** The same objects as in `seen`, for the requests a scripted `fail` answered with an error. */
   const refused: Record<string, unknown>[] = [];
   /** Streaming requests disconnected before their turn finished writing. */
@@ -318,6 +333,11 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
         res.end(JSON.stringify(seen));
         return;
       }
+      if (url.startsWith("/__headers")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(seenHeaders));
+        return;
+      }
       if (url === "/__state") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ aborted }));
@@ -326,6 +346,7 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
       if (url === "/__reset") {
         queue = [];
         seen.length = 0;
+        seenHeaders.length = 0;
         aborted = 0;
         matches = [];
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -350,6 +371,14 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
         return;
       }
       seen.push(body);
+      seenHeaders.push(
+        Object.fromEntries(
+          Object.entries(req.headers).map(([name, value]) => [
+            name.toLowerCase(),
+            Array.isArray(value) ? value.join(", ") : (value ?? ""),
+          ])
+        )
+      );
 
       if (requireReasoning && reasoningOffences(body).length > 0) {
         // The provider's own words, so a test can key on the sentence rather than on a paraphrase.
@@ -466,6 +495,9 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
     requests() {
       return seen;
     },
+    headers() {
+      return seenHeaders;
+    },
     refusedRequests() {
       return refused;
     },
@@ -475,6 +507,7 @@ export async function startFakeLlm(options: FakeLlmOptions = {}): Promise<FakeLl
     reset() {
       queue = [];
       seen.length = 0;
+      seenHeaders.length = 0;
       refused.length = 0;
       aborted = 0;
       matches = [];

@@ -395,11 +395,35 @@ test("an administrator configures a model provider from the console", async ({ p
   // service from being added: it would appear in the picker and answer nothing.
   await expect(page.getByTestId("provider-save")).toBeDisabled();
   await page.getByTestId("model-id").first().fill("second-model");
+  // The request headers are added one at a time from the + list, and are editable only here.
+  await page.getByTestId("provider-header-add").selectOption("user-agent");
+  // A blank User-Agent is legal: it saves as the built-in default, so Save stays enabled.
+  await expect(page.getByTestId("provider-save")).toBeEnabled();
+  await page.getByTestId("provider-header-add").selectOption("session");
+  // The session header has no default and deliberately no placeholder — a blank name cannot be
+  // sent, so Save refuses until one is typed.
+  await expect(page.getByTestId("provider-session-header")).not.toHaveAttribute("placeholder", /.+/);
+  await expect(page.getByTestId("provider-save")).toBeDisabled();
+  await page.getByTestId("provider-session-header").fill("x-opencode-session");
+  // Every kind is on the form, so the add control has nothing left to offer and is gone.
+  await expect(page.getByTestId("provider-header-add")).toHaveCount(0);
+  // Removing one brings it back, offering exactly what was removed.
+  await page.getByTestId("provider-header-remove").first().click();
+  await expect(page.getByTestId("provider-header-add")).toHaveCount(1);
+  await page.getByTestId("provider-header-add").selectOption("user-agent");
   await page.getByTestId("provider-save").click();
 
   await expect(page.getByTestId("admin-provider-row")).toHaveCount(2);
   const second = page.locator('[data-testid="admin-provider-row"]').filter({ hasText: "Second" });
   await expect(second).toContainText("second-model");
+
+  // They round-trip, unlike the key: reopening the editor has to show what was stored, or the
+  // fields would be controls that render and forget. The blank User-Agent was saved as the
+  // default rather than dropped.
+  await second.getByTestId("provider-edit").click();
+  await expect(page.getByTestId("provider-user-agent")).toHaveValue("ilearnassist/1.0");
+  await expect(page.getByTestId("provider-session-header")).toHaveValue("x-opencode-session");
+  await page.getByTestId("provider-close").click();
   // The console lists it, and must: this is the screen an administrator configures providers
   // on, so a row that hid itself would be one nobody could ever give a key to.
   await expect(page.getByTestId("admin-default-provider").locator("option")).toContainText([

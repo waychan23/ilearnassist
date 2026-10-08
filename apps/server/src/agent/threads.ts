@@ -1,6 +1,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage, type AIMessageChunk } from "@langchain/core/messages";
 import { usageOfChunks } from "./callUsage.js";
+import { providerClientOptions } from "./providerHeaders.js";
 import type { MessageUsage } from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
 import type { OutOfBandReasoningSetting } from "../config.js";
@@ -30,6 +31,8 @@ const TIMEOUT_MS = 60_000;
 export interface ThreadModelInput {
   provider: ProviderRecord | undefined;
   modelId: string;
+  /** The conversation's provider-facing id, for the provider's custom session header. */
+  providerSessionId?: string;
   /**
    * Whether this call may run chain-of-thought. Defaults to `auto`: a model declaring the
    * `reasoning` capability is left to the provider's own default (thinking is ON for DeepSeek
@@ -93,7 +96,9 @@ export function makeThreadClassifier(input: ThreadModelInput): ThreadClassifier 
     const llm = new ChatOpenAI({
       model,
       apiKey: provider.apiKey,
-      configuration: { baseURL: provider.baseURL },
+      configuration: providerClientOptions(provider, {
+        providerSessionId: input.providerSessionId,
+      }),
       // Classification: determinism beats creativity.
       temperature: 0.1,
       maxTokens: MAX_OUTPUT_TOKENS,

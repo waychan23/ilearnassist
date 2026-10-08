@@ -72,6 +72,42 @@ endpoints: a `PUT` with no `apiKey` field leaves the stored key untouched, which
 is how the UI can save edits to a provider whose key it is not allowed to read.
 An empty string clears the key.
 
+### Request headers
+
+Two optional keys identify a provider's requests. They are **opt-in**: a provider
+that omits both sends nothing of ours, and the SDK's own headers go out as they
+did before these keys existed. They are editable per provider in the admin
+console (控制台 → 模型服务商), added one at a time from a list, and — unlike the
+key — they round-trip: unset is `null`.
+
+```yaml
+- id: opencode-go
+  name: OpenCode Go
+  baseURL: https://opencode.ai/zen/go/v1
+  apiKey: ${OPENCODE_GO_API_KEY}
+  userAgent: ilearnassist/1.0        # optional
+  sessionHeader: x-opencode-session  # optional
+  models: [ … ]
+```
+
+`userAgent` is the request's `User-Agent`; the console's hint names the default,
+and leaving the input blank saves `ilearnassist/1.0` — the header is still sent.
+It is written on the wire itself rather than through the SDK, which would
+otherwise replace it with its own library name.
+
+`sessionHeader` names a header that carries the conversation's own generated
+session id (`sessions.provider_session_id` — minted with the conversation and
+stable for its life). That is what lets a gateway route and cache one
+conversation together; OpenCode Go documents it as `x-opencode-session`. The
+name is required once the header is added — it has no default — and every
+request the conversation makes (the turn and its out-of-band passes alike)
+carries the same id.
+
+A `sessionHeader` that is not a valid HTTP header name or is one of the reserved
+names (`authorization`, `content-type`, `host`, `user-agent`, …), or a
+`userAgent` that spans lines or exceeds 512 characters, stops the server at boot;
+the console and the provider routes refuse the same values.
+
 Models carry a display name, an optional context window and max output (used by
 the context-usage indicator), and capability flags. **These are not badges** —
 each one changes behaviour, and a model configured with the wrong one misbehaves

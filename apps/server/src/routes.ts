@@ -72,6 +72,8 @@ import {
   isEnabledSuperadmin,
   isPlatformAdmin,
   isUserRole,
+  isValidProviderHeaderName,
+  isValidProviderUserAgent,
   MAX_ATTACHMENT_BYTES,
   type MessageUsage,
   type UsageStats,
@@ -1376,6 +1378,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       baseURL: p.baseURL,
       models: p.models,
       hasApiKey: !!p.apiKey,
+      // The stored value, not an effective one: the form needs to know whether the header has
+      // been added at all, and `null` is how it says "none".
+      userAgent: p.userAgent ?? null,
+      sessionHeader: p.sessionHeader ?? null,
     }));
   }
 
@@ -2520,6 +2526,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         content = await summarizeContext({
           provider: ctx.provider,
           modelId: ctx.modelId,
+          providerSessionId: ctx.providerSessionId,
           messages,
           previous: previous?.content,
           onUsage: passRecorder({
@@ -2791,6 +2798,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           repairer: makeArtifactRepairer({
             provider: ctx.provider,
             modelId: ctx.modelId,
+            providerSessionId: ctx.providerSessionId,
             reasoning: artifactReasoning,
             onUsage: passRecorder({
               userId,
@@ -3222,7 +3230,12 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       const provider = db.getProvider(resolveProviderId(undefined, session.settings));
       const modelId = resolveModelId(provider, undefined, session.settings);
       try {
-        const generated = await generateTitle({ provider, modelId, messages });
+        const generated = await generateTitle({
+          provider,
+          modelId,
+          providerSessionId: db.providerSessionIdFor(session.id),
+          messages,
+        });
         /*
          * The same decline the turn path records, for the same reason: nothing is written as a
          * title, and the state moves so the next leave does not ask this question again.
@@ -3275,6 +3288,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         makeThreadClassifier({
           provider,
           modelId,
+          providerSessionId: db.providerSessionIdFor(id),
           reasoning: threadReasoning,
           onUsage: passRecorder({
             userId,
@@ -3468,6 +3482,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       makeInsightGenerator({
         provider,
         modelId,
+        providerSessionId: db.providerSessionIdFor(id),
         reasoning: insightReasoning,
         onUsage: passRecorder({
           userId,
@@ -3593,6 +3608,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       raw = await extractPreference({
         provider,
         modelId,
+        providerSessionId: db.providerSessionIdFor(id),
         text,
         existing,
         reasoning: preferenceReasoning,
@@ -4550,12 +4566,16 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const baseURL = body?.baseURL?.trim();
     if (!name) return reply.code(400).send(apiError("NAME_REQUIRED", "name is required"));
     if (!baseURL) return reply.code(400).send(apiError("BASE_URL_REQUIRED", "baseURL is required"));
+    const headers = parseProviderHeaderInput(body ?? {});
+    if ("error" in headers) return reply.code(400).send(apiError(headers.error, headers.message));
 
     const provider = db.createProvider({
       id: newId(),
       name,
       baseURL,
       apiKey: body.apiKey?.trim() || undefined,
+      userAgent: headers.userAgent,
+      sessionHeader: headers.sessionHeader,
     });
     for (const m of body.models ?? []) {
       const parsed = parseModelInput(m);
@@ -4571,6 +4591,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const { id } = request.params as { id: string };
     const body = request.body as UpdateProviderInput;
     if (!db.getProvider(id)) return reply.code(404).send(apiError("PROVIDER_NOT_FOUND", "provider not found"));
+    const headers = parseProviderHeaderInput(body ?? {});
+    if ("error" in headers) return reply.code(400).send(apiError(headers.error, headers.message));
 
     if (body?.models) {
       for (const m of body.models) {
@@ -4593,6 +4615,10 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       // An absent key means "leave it alone", which is what lets the UI round-trip a
       // provider whose key it is never allowed to read back.
       apiKey: body?.apiKey === undefined ? undefined : body.apiKey.trim(),
+      // Same absent/empty contract as the key, and here empty is meaningful: it is how the
+      // console removes a header it had added.
+      userAgent: headers.userAgent,
+      sessionHeader: headers.sessionHeader,
     });
     return publicProvider(provider?.id ?? id);
   });
@@ -4805,6 +4831,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   async function summarizeTurnImages(input: {
     provider: ProviderRecord | undefined;
     modelId: string;
+    /** The conversation's provider-facing id, for the provider's custom session header. */
+    providerSessionId?: string;
     /** This pass's own ledger reporter — see `passRecorder`. */
     onUsage?: (usage: MessageUsage, durationMs: number) => void;
     /**
@@ -4840,6 +4868,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         const summary = await summarizeImage({
           provider: input.provider,
           modelId: input.modelId,
+          providerSessionId: input.providerSessionId,
           dataUrl,
           sample: input.sample,
           // One row per image described, because that is one model call: the loop is over the
@@ -4914,6 +4943,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   async function autoTitle(input: {
     provider: ProviderRecord | undefined;
     modelId: string;
+    /** The conversation's provider-facing id, for the provider's custom session header. */
+    providerSessionId?: string;
     messages: readonly TitleMessage[];
     /** This pass's own ledger reporter — see `passRecorder`. */
     onUsage?: (usage: MessageUsage, durationMs: number) => void;
@@ -4968,7 +4999,13 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     void syncThreads(
       db,
       sessionId,
-      makeThreadClassifier({ provider, modelId, reasoning: threadReasoning, onUsage }),
+      makeThreadClassifier({
+        provider,
+        modelId,
+        providerSessionId: db.providerSessionIdFor(sessionId),
+        reasoning: threadReasoning,
+        onUsage,
+      }),
       "turn",
       modelId
     ).catch((err) => {
@@ -5004,6 +5041,8 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         baseURL: "",
         models: [],
         hasApiKey: false,
+        userAgent: null,
+        sessionHeader: null,
       }
     );
   }
@@ -5014,6 +5053,14 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   interface TurnContext {
     provider: ProviderRecord | undefined;
     modelId: string;
+    /**
+     * The conversation's provider-facing id, from `sessions.provider_session_id`.
+     *
+     * Carried here rather than re-read at each call site because every model request a
+     * conversation sends — the turn and the out-of-band passes alike — must carry the same
+     * value: a gateway that saw one conversation as two would route and cache it as two.
+     */
+    providerSessionId: string | undefined;
     tools: StructuredToolInterface[];
     vision: boolean;
     toolUse: boolean;
@@ -5461,6 +5508,9 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     return {
       provider,
       modelId,
+      // Read (and minted, for a row that predates the column) once per turn context, so every
+      // consumer of this object names the conversation to the provider identically.
+      providerSessionId: db.providerSessionIdFor(session.id),
       tools,
       vision: isVisionModel(provider, modelId),
       toolUse: isToolUseModel(provider, modelId),
@@ -5669,6 +5719,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     const repairer = makeArtifactRepairer({
       provider: input.ctx.provider,
       modelId: input.ctx.modelId,
+      providerSessionId: input.ctx.providerSessionId,
       reasoning: artifactReasoning,
       signal: input.signal,
       onUsage: passRecorder({
@@ -5905,6 +5956,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     void summarizeTurnImages({
       provider: ctx.provider,
       modelId: ctx.modelId,
+      providerSessionId: ctx.providerSessionId,
       vision: ctx.vision,
       user: opts.user,
       userId,
@@ -5941,6 +5993,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         const titled = await autoTitle({
           provider: ctx.provider,
           modelId: ctx.modelId,
+          providerSessionId: ctx.providerSessionId,
           messages: messagesToTitle,
           onUsage: passRecorder({
             userId,
@@ -6126,6 +6179,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         settings: session.settings,
         user: treeFor(actor(request)),
         sessionId: id,
+        providerSessionId: ctx.providerSessionId,
         vision: ctx.vision,
         toolUse: ctx.toolUse,
         history,
@@ -6411,6 +6465,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         settings: session.settings,
         user: treeFor(actor(request)),
         sessionId: id,
+        providerSessionId: ctx.providerSessionId,
         vision: ctx.vision,
         toolUse: ctx.toolUse,
         history,
@@ -6817,6 +6872,55 @@ function isParsePolicy(value: unknown): value is DocumentParsePolicy {
     value === "cloud-first" ||
     value === "cloud-only"
   );
+}
+
+/**
+ * Validate + normalize the two request-header fields a provider may carry.
+ *
+ * The absent/empty distinction is `apiKey`'s: an absent field is "not mentioned" (a `PUT` that
+ * only renames a provider must not remove its User-Agent), while an empty string is the console
+ * removing a header it had added. Both fields are validated only when they carry a value, so
+ * removal is always legal and a bad value is always a refusal rather than a silent strip.
+ *
+ * The refusal carries its own code so the client renders a sentence: `INVALID_HEADER_NAME` for
+ * a name that is not an HTTP token or is reserved (`authorization`, `content-type`, …), and
+ * `INVALID_HEADER_VALUE` for a User-Agent that spans lines or is past the length cap.
+ */
+function parseProviderHeaderInput(body: {
+  userAgent?: unknown;
+  sessionHeader?: unknown;
+}): { userAgent?: string; sessionHeader?: string } | { error: ApiErrorCode; message: string } {
+  const headers: { userAgent?: string; sessionHeader?: string } = {};
+
+  if (body.userAgent !== undefined) {
+    if (typeof body.userAgent !== "string") {
+      return { error: "INVALID_HEADER_VALUE", message: "userAgent must be a string" };
+    }
+    const value = body.userAgent.trim();
+    if (value && !isValidProviderUserAgent(value)) {
+      return {
+        error: "INVALID_HEADER_VALUE",
+        message: "userAgent must be a single line of at most 512 characters",
+      };
+    }
+    headers.userAgent = value;
+  }
+
+  if (body.sessionHeader !== undefined) {
+    if (typeof body.sessionHeader !== "string") {
+      return { error: "INVALID_HEADER_NAME", message: "sessionHeader must be a string" };
+    }
+    const value = body.sessionHeader.trim();
+    if (value && !isValidProviderHeaderName(value)) {
+      return {
+        error: "INVALID_HEADER_NAME",
+        message: "sessionHeader must be a valid HTTP header name that is not reserved",
+      };
+    }
+    headers.sessionHeader = value;
+  }
+
+  return headers;
 }
 
 /** Validate + normalize one model payload. Returns undefined when it is unusable. */

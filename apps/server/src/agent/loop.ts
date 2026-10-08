@@ -194,6 +194,15 @@ export interface RunAgentInput {
   user: UserLayout;
   sessionId: string;
   /**
+   * The conversation's provider-facing id, for a provider's custom session header.
+   *
+   * Optional because the loop does not need it to do its job — a provider with no configured
+   * header sends nothing — and the caller resolves it from `sessions.provider_session_id`
+   * (`AppDb.providerSessionIdFor`). Every request this run makes carries it, which is the
+   * whole point of the header: a gateway must see one conversation, not one per step.
+   */
+  providerSessionId?: string;
+  /**
    * The conversation's own directory, named in the prompt so the model can see both of the
    * folders it may write into. Derived the same way `turnContext` derives it for the file
    * tools, and passed rather than recomputed because the prompt and the tools disagreeing
@@ -745,6 +754,7 @@ export async function runAgentStream(input: RunAgentInput): Promise<RunAgentResu
     ...(isReasoningModel(input.provider, input.modelId)
       ? { replayReasoning: assistantReasoning }
       : {}),
+    providerSessionId: input.providerSessionId,
   });
   const modelWithTools = llm.bindTools(input.tools);
   const maxSteps = input.settings.maxSteps ?? DEFAULT_MAX_STEPS;

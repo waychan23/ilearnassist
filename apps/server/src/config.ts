@@ -3,7 +3,13 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import type { DocumentParsePolicy, DocumentParserKind } from "@ilearnassist/shared";
-import { isModelCapability, MODEL_CAPABILITIES, type ModelCapability } from "@ilearnassist/shared";
+import {
+  isModelCapability,
+  isValidProviderHeaderName,
+  isValidProviderUserAgent,
+  MODEL_CAPABILITIES,
+  type ModelCapability,
+} from "@ilearnassist/shared";
 
 export type WebSearchProvider = "bing" | "tavily" | "duckduckgo" | "searxng";
 
@@ -32,6 +38,10 @@ export interface ProviderDef {
   name: string;
   baseURL: string;
   apiKey?: string;
+  /** The User-Agent to send. Omitted means no user-agent header of ours. */
+  userAgent?: string;
+  /** The header a conversation's provider id rides. Omitted means no such header. */
+  sessionHeader?: string;
   models: ModelDef[];
 }
 
@@ -320,6 +330,11 @@ export function withDefaults(raw: Record<string, unknown>): AppConfig {
             name: asStr(v["name"], String(v["id"])),
             baseURL: String(v["baseURL"]),
             apiKey: typeof v["apiKey"] === "string" ? v["apiKey"] : undefined,
+            // Both are validated in `validateConfig`, which can name the offending provider:
+            // parsing keeps whatever was written so the error is about the actual value.
+            userAgent: typeof v["userAgent"] === "string" ? v["userAgent"].trim() : undefined,
+            sessionHeader:
+              typeof v["sessionHeader"] === "string" ? v["sessionHeader"].trim() : undefined,
             models,
           } as ProviderDef;
         })
@@ -497,6 +512,27 @@ export function validateConfig(config: AppConfig): void {
       `defaultModel "${config.defaultModel}" is not one of ${config.defaultProvider}'s models ` +
         `(${provider.models.map((m) => m.id).join(", ") || "none"}).`
     );
+  }
+
+  /*
+   * The two request-header fields, checked here rather than at send time.
+   *
+   * A bad session-header name stored at seed time is a provider whose every request throws
+   * inside the HTTP client, which reads as a broken provider rather than as the typo it is —
+   * and the typo is in a file the operator can fix. A blank value is deliberately legal: it
+   * means "the header is not added", the same absent/empty contract the console uses.
+   */
+  for (const p of config.providers) {
+    if (p.userAgent && !isValidProviderUserAgent(p.userAgent)) {
+      throw new Error(
+        `Provider "${p.id}": userAgent must be a single line of at most 512 characters.`
+      );
+    }
+    if (p.sessionHeader && !isValidProviderHeaderName(p.sessionHeader)) {
+      throw new Error(
+        `Provider "${p.id}": sessionHeader "${p.sessionHeader}" is not a valid, unreserved HTTP header name.`
+      );
+    }
   }
 
   // Document parser ids are primary keys; a duplicate would fail at seed time with an

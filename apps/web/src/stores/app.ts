@@ -171,6 +171,10 @@ export interface ProviderDraft {
   name: string;
   baseURL: string;
   apiKey: string;
+  /** The User-Agent to send. Empty means the header has not been added. */
+  userAgent: string;
+  /** The header a conversation's provider id rides. Empty means no such header. */
+  sessionHeader: string;
   /** Models as edited in the form. `id` present = an existing record. */
   models: {
     id?: string;
@@ -2090,6 +2094,10 @@ export const useAppStore = defineStore("app", () => {
       baseURL: draft.baseURL.trim(),
       // Omit entirely when blank so the server keeps the stored key untouched.
       ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+      // Both always sent, unlike the key: a blank one is how the form removes a header it had
+      // added, which the server spells `""`.
+      userAgent: draft.userAgent.trim(),
+      sessionHeader: draft.sessionHeader.trim(),
       models,
     };
 

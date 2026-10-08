@@ -554,6 +554,12 @@ export const DDL = `
     -- title_source: a description is not a name, so writing one neither offers nor costs the
     -- auto-titler its turn.
     description TEXT NOT NULL DEFAULT '',
+    -- The opaque id every provider request for this conversation identifies itself with, sent
+    -- under whatever header the provider configured (providers.session_header). Stored rather
+    -- than derived so the mapping is explicit and survives a data-root move with the database;
+    -- rows created before this column existed are filled lazily at the first request
+    -- (ensureProviderSessionId). See agent/providerHeaders.ts.
+    provider_session_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     -- Soft delete. The reserved 'sessions/<id>/' directory and every row that hangs off this
@@ -609,6 +615,14 @@ export const DDL = `
     name TEXT NOT NULL,
     base_url TEXT NOT NULL,
     api_key TEXT,
+    -- The User-Agent to send. NULL means no user-agent header of ours is attached at all —
+    -- the SDK's own name goes out as it did before this column existed. Removing the header in
+    -- the console stores NULL; the value is not a secret, so it round-trips as one.
+    user_agent TEXT,
+    -- The header a conversation's provider_session_id is sent under. NULL means the request
+    -- carries no session header. Validated as an HTTP token and against the reserved names;
+    -- see isValidProviderHeaderName.
+    session_header TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,

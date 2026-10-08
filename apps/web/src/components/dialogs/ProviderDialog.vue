@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { DEFAULT_CONTEXT_WINDOW } from "../../api/types";
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_PROVIDER_USER_AGENT,
+  isValidProviderHeaderName,
+  isValidProviderUserAgent,
+} from "../../api/types";
 import type { ProviderConfig } from "../../api/types";
 import type { ProviderDraft } from "../../stores/app";
 import Icon from "../Icon.vue";
@@ -25,12 +30,29 @@ interface ModelRow {
   capabilities: string[];
 }
 
+/**
+ * The request headers a provider may add, and the two the feature supports today.
+ *
+ * The list is the console's whole "scope of addition": the + control offers exactly these, and
+ * a kind already present is not offered again. Adding one is what turns it on — an unconfigured
+ * provider sends neither.
+ */
+type HeaderKind = "user-agent" | "session";
+const HEADER_KINDS: readonly HeaderKind[] = ["user-agent", "session"];
+
+interface HeaderRow {
+  kind: HeaderKind;
+  /** The User-Agent value, or the session header's name — whichever the kind edits. */
+  value: string;
+}
+
 const draft = reactive<{
   name: string;
   baseURL: string;
   apiKey: string;
+  headers: HeaderRow[];
   models: ModelRow[];
-}>({ name: "", baseURL: "", apiKey: "", models: [] });
+}>({ name: "", baseURL: "", apiKey: "", headers: [], models: [] });
 
 watch(
   () => props.provider,
@@ -39,6 +61,10 @@ watch(
     draft.baseURL = p?.baseURL ?? "";
     // Never prefilled — the key is write-only from the client's point of view.
     draft.apiKey = "";
+    // Unlike the key these round-trip, and `null` means "not added": a stored value is a row.
+    draft.headers = [];
+    if (p?.userAgent) draft.headers.push({ kind: "user-agent", value: p.userAgent });
+    if (p?.sessionHeader) draft.headers.push({ kind: "session", value: p.sessionHeader });
     draft.models = (p?.models ?? []).map((m) => ({
       id: m.id,
       modelId: m.modelId,
@@ -87,8 +113,74 @@ const keyPlaceholder = computed(() =>
   props.provider?.hasApiKey ? t("providers.apiKeySet") : t("providers.apiKeyUnset")
 );
 
+/*
+ * The + control's scope: the kinds not already on the form. One each — a provider has one
+ * User-Agent and one session header, so offering a duplicate would be a second row that
+ * silently overwrites the first.
+ */
+const addableKinds = computed(() =>
+  HEADER_KINDS.filter((kind) => !draft.headers.some((h) => h.kind === kind))
+);
+
+/*
+ * A `switch` of literal `t("…")` calls rather than a ternary: the catalog guard only counts a
+ * key as referenced when it is the first argument of a translation call, and a conditional
+ * expression there would leave both keys looking dead.
+ */
+function headerLabel(kind: HeaderKind): string {
+  switch (kind) {
+    case "user-agent":
+      return t("providers.header.userAgent");
+    case "session":
+      return t("providers.header.session");
+  }
+}
+
+/*
+ * Read off the event rather than through a `v-model`, so the addition cannot depend on two
+ * listeners on one `change` event firing in a particular order. The select's bound value is
+ * `""`, so it snaps back to its placeholder as soon as the row renders.
+ */
+function addHeader(event: Event) {
+  const kind = (event.target as HTMLSelectElement).value as HeaderKind | "";
+  if (kind) draft.headers.push({ kind, value: "" });
+}
+
+function removeHeader(index: number) {
+  draft.headers.splice(index, 1);
+}
+
+/*
+ * Client-side validation, using the *server's own* functions so a value this form accepts is
+ * a value the route accepts.
+ *
+ * The two rows differ on purpose, because only one of them has something to fall back on. An
+ * empty User-Agent is legal and saves as `DEFAULT_PROVIDER_USER_AGENT`; the session header has
+ * no default and no derived value, so an empty name is a row that could not be sent at all and
+ * is refused. In both cases removing the row is what turns the header off, and the × is there.
+ */
+function headerValid(row: HeaderRow): boolean {
+  if (row.kind === "user-agent") {
+    return !row.value.trim() || isValidProviderUserAgent(row.value);
+  }
+  return isValidProviderHeaderName(row.value);
+}
+
+function headerHint(row: HeaderRow): string {
+  if (row.kind === "user-agent") {
+    return headerValid(row)
+      ? t("providers.header.userAgentHint", { value: DEFAULT_PROVIDER_USER_AGENT })
+      : t("providers.header.userAgentInvalid");
+  }
+  return headerValid(row) ? t("providers.header.sessionHint") : t("providers.header.sessionInvalid");
+}
+
 const canSave = computed(
-  () => !!draft.name.trim() && !!draft.baseURL.trim() && draft.models.some((m) => m.modelId.trim())
+  () =>
+    !!draft.name.trim() &&
+    !!draft.baseURL.trim() &&
+    draft.models.some((m) => m.modelId.trim()) &&
+    draft.headers.every(headerValid)
 );
 
 const num = (v: string): number | null => {
@@ -100,11 +192,18 @@ const num = (v: string): number | null => {
 
 function save() {
   if (!canSave.value) return;
+  const userAgentRow = draft.headers.find((h) => h.kind === "user-agent");
   emit("save", {
     id: props.provider?.id,
     name: draft.name,
     baseURL: draft.baseURL,
     apiKey: draft.apiKey.trim(),
+    // An absent row is the empty string, which the store sends as "no such header". A row left
+    // blank is not absent: it saves as the built-in default, so the header is still sent.
+    userAgent: userAgentRow
+      ? userAgentRow.value.trim() || DEFAULT_PROVIDER_USER_AGENT
+      : "",
+    sessionHeader: draft.headers.find((h) => h.kind === "session")?.value.trim() ?? "",
     models: draft.models
       .filter((m) => m.modelId.trim())
       .map((m) => ({
@@ -135,6 +234,7 @@ function save() {
           <h3>{{ props.provider ? t("providers.edit") : t("providers.create") }}</h3>
           <button
             class="icon-btn"
+            data-testid="provider-close"
             :title="t('common.close')"
             :aria-label="t('common.close')"
             @click="emit('close')"
@@ -176,6 +276,54 @@ function save() {
             <div class="hint">
               {{ t("providers.apiKeyNote") }}
             </div>
+          </div>
+
+          <!--
+            The request headers, added one at a time. No rows is the ordinary state and sends
+            nothing of ours: the SDK's own headers go out exactly as they did before this
+            feature existed. The select is the whole scope of addition, and it disappears once
+            every kind it offers is on the form — an add control with nothing left to add is a
+            button that can only do nothing.
+          -->
+          <div class="headers-head">
+            <label>{{ t("providers.requestHeaders") }}</label>
+            <select
+              v-if="addableKinds.length > 0"
+              class="select header-add"
+              data-testid="provider-header-add"
+              :value="''"
+              @change="addHeader"
+            >
+              <option value="">{{ t("providers.addHeader") }}</option>
+              <option v-for="kind in addableKinds" :key="kind" :value="kind">
+                {{ headerLabel(kind) }}
+              </option>
+            </select>
+          </div>
+          <div class="headers-hint">{{ t("providers.requestHeadersHint") }}</div>
+
+          <div v-for="(h, i) in draft.headers" :key="h.kind" class="header-row">
+            <div class="field">
+              <label>{{ headerLabel(h.kind) }}</label>
+              <input
+                v-model="h.value"
+                class="input"
+                :data-testid="
+                  h.kind === 'user-agent' ? 'provider-user-agent' : 'provider-session-header'
+                "
+                :placeholder="h.kind === 'user-agent' ? DEFAULT_PROVIDER_USER_AGENT : undefined"
+              />
+              <div class="hint" :class="{ warn: !headerValid(h) }">{{ headerHint(h) }}</div>
+            </div>
+            <button
+              class="icon-btn danger header-remove"
+              data-testid="provider-header-remove"
+              :title="t('providers.removeHeader')"
+              :aria-label="t('providers.removeHeader')"
+              @click="removeHeader(i)"
+            >
+              <Icon name="close" />
+            </button>
           </div>
 
           <div class="models-head">
@@ -283,6 +431,7 @@ function save() {
   margin-bottom: var(--space-5);
   line-height: var(--lh-base);
 }
+.hint.warn,
 .model-main .hint.warn {
   color: var(--warning);
 }
@@ -290,6 +439,35 @@ function save() {
   color: var(--text-2);
 }
 .model-main .icon-btn {
+  margin-top: var(--space-9);
+}
+.headers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: var(--space-2) 0 var(--space-3);
+  color: var(--text-2);
+  font-size: var(--fs-3);
+}
+.header-add {
+  width: auto;
+}
+.headers-hint {
+  font-size: var(--fs-2);
+  color: var(--text-3);
+  margin-bottom: var(--space-4);
+  line-height: var(--lh-base);
+}
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+.header-row .field {
+  flex: 1;
+  min-width: 0;
+}
+.header-row .header-remove {
   margin-top: var(--space-9);
 }
 /*

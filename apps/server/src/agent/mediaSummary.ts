@@ -2,6 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { MessageUsage } from "@ilearnassist/shared";
 import { usageOfMessage } from "./callUsage.js";
+import { providerClientOptions } from "./providerHeaders.js";
 import type { ProviderRecord } from "../db.js";
 import { renderPrompt } from "../prompts.js";
 
@@ -51,6 +52,8 @@ const MAX_OUTPUT_TOKENS = 512;
 export interface SummarizeImageInput {
   provider: ProviderRecord | undefined;
   modelId: string;
+  /** The conversation's provider-facing id, for the provider's custom session header. */
+  providerSessionId?: string;
   dataUrl: string;
   /**
    * A line of the conversation, so the description comes back in the language being read.
@@ -96,7 +99,9 @@ export async function summarizeImage(input: SummarizeImageInput): Promise<string
   const llm = new ChatOpenAI({
     model,
     apiKey: provider.apiKey,
-    configuration: { baseURL: provider.baseURL },
+    configuration: providerClientOptions(provider, {
+      providerSessionId: input.providerSessionId,
+    }),
     temperature: 0.2,
     maxTokens: MAX_OUTPUT_TOKENS,
     maxRetries: 0,
