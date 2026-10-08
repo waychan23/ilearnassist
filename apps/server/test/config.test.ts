@@ -128,6 +128,36 @@ describe("withDefaults", () => {
     expect(config.providers[0]!.name).toBe("p");
   });
 
+  it("maps the two request-header keys, trimming them", () => {
+    const config = withDefaults({
+      providers: [
+        {
+          id: "p",
+          baseURL: "http://x",
+          userAgent: "  agent/1  ",
+          sessionHeader: " x-session ",
+          models: [],
+        },
+      ],
+    });
+    expect(config.providers[0]).toMatchObject({
+      userAgent: "agent/1",
+      sessionHeader: "x-session",
+    });
+  });
+
+  it("leaves a non-string request-header value undefined", () => {
+    // The YAML is operator-written, so a number or a list here is a mistake to ignore rather
+    // than a value to stringify into a header.
+    const config = withDefaults({
+      providers: [
+        { id: "p", baseURL: "http://x", userAgent: 5, sessionHeader: ["x"], models: [] },
+      ],
+    });
+    expect(config.providers[0]!.userAgent).toBeUndefined();
+    expect(config.providers[0]!.sessionHeader).toBeUndefined();
+  });
+
   it("ignores a non-array providers node", () => {
     expect(withDefaults({ providers: "nope" }).providers).toEqual([]);
   });
@@ -195,6 +225,33 @@ describe("validateConfig", () => {
 
   it("rejects a config with no providers", () => {
     expect(() => validateConfig({ ...base, providers: [] })).toThrow(/No providers configured/);
+  });
+
+  it("rejects a provider whose userAgent spans lines, naming the provider", () => {
+    expect(() =>
+      validateConfig({
+        ...base,
+        providers: [{ ...base.providers[0]!, userAgent: "agent/1\r\nx-evil: 1" }],
+      })
+    ).toThrow(/Provider "p": userAgent/);
+  });
+
+  it("rejects a reserved session header name, naming the provider", () => {
+    expect(() =>
+      validateConfig({
+        ...base,
+        providers: [{ ...base.providers[0]!, sessionHeader: "authorization" }],
+      })
+    ).toThrow(/Provider "p": sessionHeader/);
+  });
+
+  it("accepts blank request-header values, which mean 'no override'", () => {
+    expect(() =>
+      validateConfig({
+        ...base,
+        providers: [{ ...base.providers[0]!, userAgent: "", sessionHeader: "" }],
+      })
+    ).not.toThrow();
   });
 
   it("rejects a defaultProvider that matches nothing", () => {

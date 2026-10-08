@@ -276,6 +276,34 @@ describe("sessions", () => {
     expect(session.settings).toEqual({});
   });
 
+  it("mints a provider-facing id at creation and keeps it stable", () => {
+    addSession("s1");
+    const id = db.providerSessionIdFor("s1");
+    expect(id).toBeTruthy();
+    // The same answer on every later turn, which is what the header promises the provider.
+    expect(db.providerSessionIdFor("s1")).toBe(id);
+  });
+
+  it("mints one lazily for a row written before the column existed", () => {
+    addSession("s1");
+    db.raw.prepare("UPDATE sessions SET provider_session_id = NULL WHERE id = ?").run("s1");
+
+    const minted = db.providerSessionIdFor("s1");
+    expect(minted).toBeTruthy();
+    // And the minted value is written down, not invented per call.
+    expect(db.providerSessionIdFor("s1")).toBe(minted);
+  });
+
+  it("gives two conversations different provider-facing ids", () => {
+    addSession("s1");
+    addSession("s2");
+    expect(db.providerSessionIdFor("s1")).not.toBe(db.providerSessionIdFor("s2"));
+  });
+
+  it("answers undefined for a session that does not exist", () => {
+    expect(db.providerSessionIdFor("nope")).toBeUndefined();
+  });
+
   it("flips to user-titled when a title is supplied", () => {
     addSession("s1");
     const renamed = db.updateSessionForUser("s1", OWNER, { title: "  My Notes  " });
@@ -701,6 +729,41 @@ describe("providers and models", () => {
     expect(db.getProvider("p1")!.apiKey).toBeUndefined();
   });
 
+  it("round-trips the two request-header fields", () => {
+    db.createProvider({
+      id: "p1",
+      name: "One",
+      baseURL: "http://1",
+      userAgent: "my-agent/1.0",
+      sessionHeader: "x-opencode-session",
+    });
+    expect(db.getProvider("p1")).toMatchObject({
+      userAgent: "my-agent/1.0",
+      sessionHeader: "x-opencode-session",
+    });
+  });
+
+  it("keeps the stored header fields when the update omits them, and clears them on empty", () => {
+    db.createProvider({
+      id: "p1",
+      name: "One",
+      baseURL: "http://1",
+      userAgent: "my-agent/1.0",
+      sessionHeader: "x-session",
+    });
+
+    db.updateProvider("p1", { name: "Renamed" });
+    expect(db.getProvider("p1")).toMatchObject({
+      userAgent: "my-agent/1.0",
+      sessionHeader: "x-session",
+    });
+
+    db.updateProvider("p1", { userAgent: "", sessionHeader: "" });
+    const cleared = db.getProvider("p1")!;
+    expect(cleared.userAgent).toBeUndefined();
+    expect(cleared.sessionHeader).toBeUndefined();
+  });
+
   it("ignores blank name/baseURL fields", () => {
     db.createProvider({ id: "p1", name: "One", baseURL: "http://1" });
     db.updateProvider("p1", { name: "   ", baseURL: "" });
@@ -814,6 +877,23 @@ describe("seedFromConfig", () => {
   it("pre-fills capabilities", () => {
     seedFromConfig(db, seed);
     expect(db.getProvider("p")!.models[0]!.capabilities).toContain("tool_use");
+  });
+
+  it("carries the seed's request-header settings into the record", () => {
+    seedFromConfig(db, {
+      ...seed,
+      providers: [
+        {
+          ...seed.providers[0]!,
+          userAgent: "seed-agent/1",
+          sessionHeader: "x-seed-session",
+        },
+      ],
+    });
+    expect(db.getProvider("p")).toMatchObject({
+      userAgent: "seed-agent/1",
+      sessionHeader: "x-seed-session",
+    });
   });
 
   it("prefers a declared capability over the guess", () => {
@@ -965,6 +1045,67 @@ describe("schema versioning", () => {
       // The rows that predate the column, read through the ordinary accessors.
       expect(opened.getWorkspaceForUser("w1", "u1")?.description).toBe("");
       expect(opened.getSessionForUser("s1", "u1")?.session.description).toBe("");
+    } finally {
+      opened.raw.close();
+    }
+  });
+
+  it("gains the provider header columns and the session provider id", () => {
+    /*
+     * The same additive rule as the cases above, with one twist worth checking here: unlike a
+     * NULL that merely reads as "unset", `sessions.provider_session_id` has to be *filled* for
+     * an old row before its first provider request — so this asserts the read, the lazy mint and
+     * the write, not just that the column appeared.
+     */
+    const path = join(root, "pre-headers.sqlite");
+    writeDbFile(path, SCHEMA_VERSION, true);
+    const raw = new Database(path);
+    raw.exec(
+      `CREATE TABLE providers (
+         id TEXT PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT,
+         sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+         deleted_at TEXT
+       )`
+    );
+    raw.exec(
+      `CREATE TABLE sessions (
+         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, copilot_id TEXT, copilot_name TEXT NOT NULL DEFAULT '',
+         system_prompt TEXT NOT NULL DEFAULT '', all_tools INTEGER NOT NULL DEFAULT 1, tools TEXT NOT NULL DEFAULT '[]',
+         title TEXT NOT NULL, title_source TEXT NOT NULL DEFAULT 'auto', settings TEXT NOT NULL DEFAULT '{}',
+         description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+       )`
+    );
+    raw
+      .prepare(
+        "INSERT INTO providers VALUES ('p1', 'Old', 'https://old.test', NULL, 0, '2024-01-01', '2024-01-01', NULL)"
+      )
+      .run();
+    raw
+      .prepare(
+        "INSERT INTO sessions VALUES ('s1', 'w1', NULL, '', '', 1, '[]', 'Old Talk', 'auto', '{}', '', '2024-01-01', '2024-01-01', NULL)"
+      )
+      .run();
+    raw.close();
+
+    const opened = createDb(path);
+    try {
+      const columnsOf = (table: string): string[] =>
+        (opened.raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
+          (c) => c.name
+        );
+      expect(columnsOf("providers")).toContain("user_agent");
+      expect(columnsOf("providers")).toContain("session_header");
+      expect(columnsOf("sessions")).toContain("provider_session_id");
+
+      // An old provider reads as "no override", which is exactly what it sent before.
+      const provider = opened.getProvider("p1")!;
+      expect(provider.userAgent).toBeUndefined();
+      expect(provider.sessionHeader).toBeUndefined();
+
+      // An old session gets an id on first ask, and keeps it afterwards.
+      const minted = opened.providerSessionIdFor("s1");
+      expect(minted).toBeTruthy();
+      expect(opened.providerSessionIdFor("s1")).toBe(minted);
     } finally {
       opened.raw.close();
     }

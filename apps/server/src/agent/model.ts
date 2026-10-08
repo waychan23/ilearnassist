@@ -1,6 +1,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import type { MessageModel, SessionSettings } from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
+import { providerClientOptions } from "./providerHeaders.js";
 
 export interface BuiltModel {
   llm: ChatOpenAI;
@@ -233,6 +234,11 @@ export interface BuildModelHooks {
    * when the model is configured with the `reasoning` capability — see `withReplayedReasoning`.
    */
   replayReasoning?: readonly string[];
+  /**
+   * The conversation's provider-facing id, so the provider's custom session header can carry it.
+   * See `agent/providerHeaders.ts`; absent means the request sends no session header.
+   */
+  providerSessionId?: string;
 }
 
 export function buildModel(
@@ -256,8 +262,11 @@ export function buildModel(
   const llm = new ChatOpenAI({
     model,
     apiKey: provider.apiKey,
-    configuration: {
-      baseURL: provider.baseURL,
+    // Headers and the reasoning tap ride the same `configuration`: a provider identified as
+    // this client on some of its requests and not others is the routing problem the session
+    // header exists to avoid. `providerClientOptions` is the one place that pair is assembled.
+    configuration: providerClientOptions(provider, {
+      providerSessionId: hooks.providerSessionId,
       ...(hooks.onReasoning || hooks.replayReasoning
         ? {
             fetch: createReasoningFetch({
@@ -266,7 +275,7 @@ export function buildModel(
             }),
           }
         : {}),
-    },
+    }),
     streaming: true,
     ...(params.temperature != null ? { temperature: params.temperature } : {}),
     ...(params.topP != null ? { topP: params.topP } : {}),

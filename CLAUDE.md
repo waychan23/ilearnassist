@@ -882,6 +882,27 @@ public half.
   every provider response has only `hasApiKey: boolean`, never the key. A `PUT`
   with no `apiKey` field means "leave unchanged" — that is what lets the UI edit a
   provider it cannot read the key of.
+- **A provider's request-header identity is opt-in, and one place writes it.**
+  `agent/providerHeaders.ts` sends the provider's `userAgent` as `User-Agent` and, when the
+  provider names a `sessionHeader`, that header with the conversation's
+  `sessions.provider_session_id`. A provider that configures neither sends nothing of ours —
+  the console adds each header from a + list, and no rows is the ordinary state, so the SDK's
+  own headers go out as they did before the feature existed. Three things are load-bearing:
+  configured headers ride `configuration.fetch`, **not** `configuration.defaultHeaders`,
+  because `@langchain/openai` replaces a supplied User-Agent with its own SDK string on that
+  path (OpenCode Go explicitly asks for the opposite); the session id is **stored, not
+  derived** — minted by `createSession`, lazily filled for older rows by `providerSessionIdFor`,
+  and stable for the conversation's life — because the whole point is that the same
+  conversation presents the same id on all of its requests; and **all eight model
+  constructions** (the main loop plus the seven out-of-band passes) go through
+  `providerClientOptions`, including the out-of-band ones, since a header on some requests is
+  the routing problem it exists to avoid. The two rows differ on purpose: a blank console
+  `user-agent` row is legal and saves as `DEFAULT_PROVIDER_USER_AGENT`, while a blank
+  `sessionHeader` row is refused — the session header has no default and no derivable value, so
+  an empty name is a row that could not be sent. The two fields round-trip (`null` = not added),
+  and `isValidProviderHeaderName`/`isValidProviderUserAgent` are shared so the form, the route
+  and `validateConfig` all refuse the same values — including the reserved names
+  (`authorization` would overwrite the API key the request authenticates with).
 - **Shared types only.** Cross-boundary payloads live in `packages/shared`. Adding
   a field to an API response means updating the type there first, then both apps
   typecheck clean.

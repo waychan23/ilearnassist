@@ -2,6 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { MessageUsage } from "@ilearnassist/shared";
 import { usageOfMessage } from "./callUsage.js";
+import { providerClientOptions } from "./providerHeaders.js";
 import type { ProviderRecord } from "../db.js";
 import { renderPrompt } from "../prompts.js";
 
@@ -151,6 +152,8 @@ export function applyContextSummary<T extends { id: string; createdAt: string }>
 export interface SummarizeContextInput {
   provider: ProviderRecord | undefined;
   modelId: string;
+  /** The conversation's provider-facing id, for the provider's custom session header. */
+  providerSessionId?: string;
   /** The effective history being compressed: the previous summary's tail, oldest first. */
   messages: readonly CompactMessage[];
   /** The summary this compaction supersedes, folded into the new one when present. */
@@ -192,7 +195,9 @@ export async function summarizeContext(input: SummarizeContextInput): Promise<st
   const llm = new ChatOpenAI({
     model,
     apiKey: provider.apiKey,
-    configuration: { baseURL: provider.baseURL },
+    configuration: providerClientOptions(provider, {
+      providerSessionId: input.providerSessionId,
+    }),
     // Summarizing is a faithful-restatement task; determinism beats creativity, as in the titler.
     temperature: 0.2,
     maxTokens: MAX_OUTPUT_TOKENS,

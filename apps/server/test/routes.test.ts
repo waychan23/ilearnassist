@@ -1103,6 +1103,110 @@ describe("providers", () => {
     expect(cleared.hasApiKey).toBe(false);
   });
 
+  describe("custom request headers", () => {
+    it("stores and returns a User-Agent and a session header name", async () => {
+      const provider = (
+        await inject({
+          method: "POST",
+          url: "/api/providers",
+          payload: {
+            name: "Headers",
+            baseURL: "https://headers.test",
+            userAgent: "my-agent/1.0",
+            sessionHeader: "x-opencode-session",
+          },
+        })
+      ).json<ProviderConfig>();
+
+      expect(provider.userAgent).toBe("my-agent/1.0");
+      expect(provider.sessionHeader).toBe("x-opencode-session");
+    });
+
+    it("reports both unset as null, so the console knows the default applies", async () => {
+      const provider = (
+        await inject({ method: "POST", url: "/api/providers", payload: { name: "Plain", baseURL: "https://plain.test" } })
+      ).json<ProviderConfig>();
+
+      expect(provider.userAgent).toBeNull();
+      expect(provider.sessionHeader).toBeNull();
+    });
+
+    it("keeps the stored values when the update omits them, and clears them on empty", async () => {
+      const provider = (
+        await inject({
+          method: "POST",
+          url: "/api/providers",
+          payload: {
+            name: "Keeper",
+            baseURL: "https://keeper.test",
+            userAgent: "agent/1",
+            sessionHeader: "x-session",
+          },
+        })
+      ).json<ProviderConfig>();
+
+      const kept = (
+        await inject({ method: "PUT", url: `/api/providers/${provider.id}`, payload: { name: "Renamed" } })
+      ).json<ProviderConfig>();
+      expect(kept.userAgent).toBe("agent/1");
+      expect(kept.sessionHeader).toBe("x-session");
+
+      const cleared = (
+        await inject({
+          method: "PUT",
+          url: `/api/providers/${provider.id}`,
+          payload: { userAgent: "", sessionHeader: "" },
+        })
+      ).json<ProviderConfig>();
+      expect(cleared.userAgent).toBeNull();
+      expect(cleared.sessionHeader).toBeNull();
+    });
+
+    it("refuses a session header that is not a usable HTTP name", async () => {
+      const res = await inject({
+        method: "POST",
+        url: "/api/providers",
+        payload: { name: "BadName", baseURL: "https://bad.test", sessionHeader: "not a name" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json<ApiErrorBody>().error.code).toBe("INVALID_HEADER_NAME");
+    });
+
+    it("refuses a reserved session header name, whatever its case", async () => {
+      const res = await inject({
+        method: "POST",
+        url: "/api/providers",
+        payload: { name: "Reserved", baseURL: "https://reserved.test", sessionHeader: "Authorization" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json<ApiErrorBody>().error.code).toBe("INVALID_HEADER_NAME");
+    });
+
+    it("refuses a User-Agent that spans lines", async () => {
+      const res = await inject({
+        method: "POST",
+        url: "/api/providers",
+        payload: {
+          name: "Injected",
+          baseURL: "https://inject.test",
+          userAgent: "agent/1\r\nx-evil: 1",
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json<ApiErrorBody>().error.code).toBe("INVALID_HEADER_VALUE");
+    });
+
+    it("refuses a request-header field of the wrong shape rather than coercing it", async () => {
+      const res = await inject({
+        method: "POST",
+        url: "/api/providers",
+        payload: { name: "WrongShape", baseURL: "https://wrong.test", sessionHeader: 5 },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json<ApiErrorBody>().error.code).toBe("INVALID_HEADER_NAME");
+    });
+  });
+
   it("adds and edits models in one PUT", async () => {
     const provider = (
       await inject({

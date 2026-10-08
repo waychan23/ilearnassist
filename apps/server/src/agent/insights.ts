@@ -1,6 +1,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage, type AIMessageChunk } from "@langchain/core/messages";
 import { usageOfChunks } from "./callUsage.js";
+import { providerClientOptions } from "./providerHeaders.js";
 import type { MessageUsage } from "@ilearnassist/shared";
 import type { ProviderRecord } from "../db.js";
 import type { OutOfBandReasoningSetting } from "../config.js";
@@ -31,6 +32,8 @@ const TIMEOUT_MS = 60_000;
 export interface InsightModelInput {
   provider: ProviderRecord | undefined;
   modelId: string;
+  /** The conversation's provider-facing id, for the provider's custom session header. */
+  providerSessionId?: string;
   /**
    * Whether this call may run chain-of-thought. Defaults to `auto` — see
    * `OutOfBandReasoningSetting`. Its own switch (`ILA_INSIGHT_REASONING`) rather than the
@@ -88,7 +91,9 @@ export function makeInsightGenerator(input: InsightModelInput): InsightGenerator
     const llm = new ChatOpenAI({
       model,
       apiKey: provider.apiKey,
-      configuration: { baseURL: provider.baseURL },
+      configuration: providerClientOptions(provider, {
+        providerSessionId: input.providerSessionId,
+      }),
       temperature: 0.2,
       maxTokens: MAX_OUTPUT_TOKENS,
       maxRetries: 0,

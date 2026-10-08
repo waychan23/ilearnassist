@@ -2,6 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { MessageUsage } from "@ilearnassist/shared";
 import { usageOfMessage } from "./callUsage.js";
+import { providerClientOptions } from "./providerHeaders.js";
 import type { ProviderRecord } from "../db.js";
 import { renderPrompt } from "../prompts.js";
 
@@ -38,6 +39,8 @@ export interface TitleMessage {
 export interface GenerateTitleInput {
   provider: ProviderRecord | undefined;
   modelId: string;
+  /** The conversation's provider-facing id, for the provider's custom session header. */
+  providerSessionId?: string;
   /**
    * The conversation so far, oldest first — what the titler reads and what the fallback quotes.
    *
@@ -191,7 +194,9 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
   const llm = new ChatOpenAI({
     model,
     apiKey: provider.apiKey,
-    configuration: { baseURL: provider.baseURL },
+    configuration: providerClientOptions(provider, {
+      providerSessionId: input.providerSessionId,
+    }),
     // Naming a conversation is a classification task; determinism beats creativity.
     temperature: 0.2,
     maxTokens: MAX_OUTPUT_TOKENS,

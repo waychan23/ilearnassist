@@ -113,6 +113,8 @@ const mocks = vi.hoisted(() => ({
     deleteDocumentParser: vi.fn(),
     testDocumentParser: vi.fn(),
     updateDocumentParsing: vi.fn(),
+    createProvider: vi.fn(),
+    updateProvider: vi.fn(),
     deleteProvider: vi.fn(),
     deleteModel: vi.fn(),
     deleteMessage: vi.fn(),
@@ -222,6 +224,8 @@ const CONFIG: PublicConfig = {
       name: "Provider One",
       baseURL: "https://p1.test/v1",
       hasApiKey: true,
+      userAgent: null,
+      sessionHeader: null,
       models: [
         { id: "r1", modelId: "m1", name: "M1", capabilities: ["tool_use", "vision"], contextWindow: 1000 },
         { id: "r2", modelId: "m2", name: "M2", capabilities: ["tool_use"] },
@@ -232,6 +236,8 @@ const CONFIG: PublicConfig = {
       name: "Provider Two",
       baseURL: "https://p2.test/v1",
       hasApiKey: false,
+      userAgent: "other-agent/2.0",
+      sessionHeader: "x-opencode-session",
       models: [{ id: "r3", modelId: "m3", name: "M3", capabilities: ["tool_use"] }],
     },
   ],
@@ -953,6 +959,40 @@ describe("provider and model resolution", () => {
     });
     const store = await readyStore();
     expect(store.isConfigured).toBe(false);
+  });
+
+  it("sends the request-header fields when saving a provider", async () => {
+    const saved = {
+      ...CONFIG.providers[0]!,
+      userAgent: "my-agent/1.0",
+      sessionHeader: "x-opencode-session",
+    };
+    mocks.api.updateProvider.mockResolvedValue(saved);
+    const store = await readyStore();
+
+    await store.saveProvider({
+      id: "p1",
+      name: "Provider One",
+      baseURL: "https://p1.test/v1",
+      apiKey: "",
+      userAgent: "  my-agent/1.0  ",
+      sessionHeader: "  x-opencode-session  ",
+      models: [],
+    });
+
+    // Trimmed, and the blank key omitted so the stored one survives, exactly as before.
+    expect(mocks.api.updateProvider).toHaveBeenCalledWith(
+      "p1",
+      expect.objectContaining({ userAgent: "my-agent/1.0", sessionHeader: "x-opencode-session" })
+    );
+    expect(mocks.api.updateProvider).toHaveBeenCalledWith(
+      "p1",
+      expect.not.objectContaining({ apiKey: expect.anything() })
+    );
+    expect(store.config?.providers.find((p) => p.id === "p1")).toMatchObject({
+      userAgent: "my-agent/1.0",
+      sessionHeader: "x-opencode-session",
+    });
   });
 
   it("reads the context size from the most recent assistant turn", async () => {
