@@ -347,6 +347,7 @@ test("the canned replies appear once there is something to reply to", async ({ p
   await expect(quick.getByTestId("quick-continue")).toHaveText("继续");
   await expect(quick.getByTestId("quick-yes")).toHaveText("是的");
   await expect(quick.getByTestId("quick-ok")).toHaveText("可以");
+  await expect(quick.getByTestId("quick-needReview")).toHaveText("有问题，检查一下");
 
   // The label names the row rather than joining it: a fourth thing shaped like a chip would be
   // a fourth thing to click, and clicking this one would have to do nothing.

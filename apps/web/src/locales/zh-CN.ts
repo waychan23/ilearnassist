@@ -568,6 +568,7 @@ export default {
       continue: "继续",
       yes: "是的",
       ok: "可以",
+      needReview: "有问题，检查一下",
     },
     /* The session-parameters button's label lives under `sessionSettings.open`: three places
        open that dialog, and it is the dialog that owns the words. */

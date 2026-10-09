@@ -426,6 +426,7 @@ const en: typeof MessageSchema = {
       continue: "Continue",
       yes: "Yes",
       ok: "OK",
+      needReview: "Need review",
     },
     /* The session-parameters button's label lives under `sessionSettings.open`: three places
        open that dialog, and it is the dialog that owns the words. */

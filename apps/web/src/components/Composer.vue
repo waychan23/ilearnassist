@@ -404,6 +404,7 @@ const quickReplies = computed(() => [
   { id: "continue", label: t("composer.quick.continue") },
   { id: "yes", label: t("composer.quick.yes") },
   { id: "ok", label: t("composer.quick.ok") },
+  { id: "needReview", label: t("composer.quick.needReview") },
 ]);
 
 /**
