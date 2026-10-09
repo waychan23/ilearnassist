@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ToolCall } from "../api/types";
+import type { ArtifactKind, ToolCall } from "../api/types";
 import { canAnnotate, objectNoteRequest } from "../composables/notes";
 import { requestNoteEditor } from "../composables/messageNotes";
 import { useAppStore } from "../stores/app";
@@ -29,6 +29,8 @@ import Icon from "./Icon.vue";
  */
 
 const props = defineProps<{ toolCall: ToolCall }>();
+/** The failure view's way back: ask the parent (ToolCallCard → MessageItem) to repair it. */
+const emit = defineEmits<{ repair: [address: { callId: string; kind: ArtifactKind }] }>();
 
 const { t, te } = useI18n();
 const store = useAppStore();
@@ -162,7 +164,18 @@ function noteAbout(): void {
     </div>
 
     <div v-if="failed" class="diagram-failed" data-testid="diagram-failure">
-      {{ props.toolCall.output }}
+      <span class="failed-text">{{ props.toolCall.output }}</span>
+      <!-- The way back when the automatic verification could not finish this one. `.stop`
+           keeps the press from toggling the head disclosure. -->
+      <button
+        class="icon-btn act repair"
+        data-testid="diagram-repair"
+        :title="t('inlineArtifact.repair')"
+        :aria-label="t('inlineArtifact.repair')"
+        @click.stop="emit('repair', { callId: toolCall.id, kind: 'diagram' })"
+      >
+        <Icon name="retry" /> {{ t("inlineArtifact.repair") }}
+      </button>
     </div>
 
     <template v-else>

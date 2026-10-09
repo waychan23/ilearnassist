@@ -154,6 +154,26 @@ function openRow(row: FigureRow): void {
   viewing.value = row;
 }
 
+/** Which missing diagram row is being repaired right now, by row key. One at a time. */
+const repairingRow = ref<string | null>(null);
+
+/**
+ * Regenerate one diagram row whose `.mmd` is gone.
+ *
+ * The store repairs by the originating call id and, on success, emits `diagram.changed`,
+ * which the subscription above reloads from — clearing `fileMissing`. Rows from before
+ * call ids were stamped cannot be targeted here, and show no control.
+ */
+async function repairDiagramRow(row: FigureRow): Promise<void> {
+  if (row.kind !== "diagram" || !row.toolCallId || repairingRow.value !== null) return;
+  repairingRow.value = row.key;
+  try {
+    await store.repairArtifact({ callId: row.toolCallId, kind: "diagram" });
+  } finally {
+    repairingRow.value = null;
+  }
+}
+
 /**
  * Whether a note can be written here at all.
  *
@@ -271,6 +291,18 @@ function noteAbout(row: FigureRow, event: MouseEvent): void {
             @click="store.stageReference(figureReference(row))"
           >
             <Icon name="link" />
+          </button>
+          <!-- A diagram whose file is gone: regenerate it from the originating call. Old
+               rows without a stamped call id cannot be targeted, so they show nothing. -->
+          <button
+            v-if="row.kind === 'diagram' && row.fileMissing && row.toolCallId"
+            class="icon-btn diagram-repair"
+            data-testid="diagram-row-repair"
+            :title="t('inlineArtifact.repair')"
+            :aria-label="t('inlineArtifact.repair')"
+            @click="repairDiagramRow(row)"
+          >
+            <Icon name="retry" :class="{ spin: repairingRow === row.key }" />
           </button>
           <!--
             Writing a note about a figure, a sibling of the locate button rather than part of the

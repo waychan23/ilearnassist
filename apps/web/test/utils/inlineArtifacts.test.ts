@@ -198,6 +198,51 @@ describe("buildInlineParts — streaming states", () => {
   });
 });
 
+describe("buildInlineParts — superseded calls", () => {
+  const content = "Intro\n\n[[artifact:diagram/empty]]\n\nOutro";
+
+  it("hides a failed call once a later same-identity repair answers the marker", () => {
+    const failed = call(
+      "ila_diagram",
+      { name: "empty", source: "   ", summary: "s" },
+      { output: "Tool error: empty source", contentOffset: content.indexOf("[[artifact:") }
+    );
+    const success = call(
+      "ila_diagram",
+      { name: "empty", source: "flowchart TD", summary: "s" },
+      { output: "saved" }
+    );
+
+    const result = buildInlineParts(content, [failed, success], { settled: true });
+
+    const slots = result.parts.filter((p) => p.kind === "slot") as ArtifactSlot[];
+    expect(slots).toHaveLength(1);
+    expect(slots[0]!.toolCall?.id).toBe(success.id);
+    expect(result.hiddenCallIds).toEqual(new Set([failed.id]));
+    expect(result.legacyCalls).toEqual([]);
+  });
+
+  it("hides the earlier failure when two calls have no marker", () => {
+    const failed = call(
+      "ila_diagram",
+      { name: "empty", source: "  ", summary: "s" },
+      { output: "Tool error: x", contentOffset: 5 }
+    );
+    const success = call(
+      "ila_diagram",
+      { name: "empty", source: "flowchart TD", summary: "s" },
+      { output: "saved", contentOffset: 5 }
+    );
+
+    const result = buildInlineParts("some prose", [failed, success], { settled: true });
+
+    const slots = result.parts.filter((p) => p.kind === "slot") as ArtifactSlot[];
+    expect(slots).toHaveLength(1);
+    expect(slots[0]!.toolCall?.id).toBe(success.id);
+    expect(result.hiddenCallIds).toEqual(new Set([failed.id]));
+  });
+});
+
 describe("parseArtifactMarkers", () => {
   it("does not return marker-like text inside a code fence", () => {
     const content = "```\n[[artifact:diagram/x]]\n```\nprose";

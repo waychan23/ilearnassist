@@ -99,9 +99,7 @@ import {
   USERNAME_MAX_LENGTH,
   WRITE_FILE_TOOL_NAME,
   isArtifactTool,
-  parseArtifactMarkers,
   stripInlineMarkers,
-  unmatchedArtifactMarkers,
   type QuizMakeupSubmitBody,
   type QuizQuestion,
 } from "@ilearnassist/shared";
@@ -198,9 +196,15 @@ import { runAgentStream, type RunAgentResult } from "./agent/loop.js";
 import { makeArtifactRepairer } from "./agent/artifactRepair.js";
 import {
   ArtifactToolUnavailableError,
-  fileMarkerExists,
+  fileTargetExists,
   repairArtifactMarker,
 } from "./artifactRepair.js";
+import {
+  artifactPresent,
+  collectRepairTargets,
+  type ArtifactPresenceContext,
+  type RepairTarget,
+} from "./artifactVerify.js";
 import { applyContextSummary, summarizeContext, type CompactMessage } from "./agent/compact.js";
 import { smartContextGuidance } from "./agent/smartContext.js";
 import { describeModel } from "./agent/model.js";
@@ -2691,19 +2695,23 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   });
 
   /**
-   * Complete one inline marker by hand — the control on a dangling artifact slot.
+   * Complete one missing artifact by hand — the control on a dangling marker slot, a failed
+   * artifact card, or a 图表 panel row whose file is gone.
    *
-   * The automatic pass in `finishTurn` covers the ordinary case; this is the way back for
-   * everything it cannot: a turn that was stopped, a repair whose call failed, a provider that
-   * was down, or a marker on a message from before this feature existed. It is the same
-   * mechanism one marker at a time — generate with the named tool, invoke the real tool, append
-   * the call to the message that asked for it — so the card appears in place with no rewrite of
-   * the reply's `content`.
+   * The automatic verification in `finishTurn` covers the ordinary case; this is the way back
+   * for everything it cannot: a turn that was stopped, a repair whose call failed, a provider
+   * that was down, or an artifact on a message from before verification existed. The target is
+   * addressed by a marker offset (`start`) or the originating call id (`callId`), and resolved
+   * through the same programmatic checks — the route refuses when the artifact is actually
+   * there. It then runs the same mechanism once: generate with the named tool, invoke the real
+   * tool, append the call to the message that asked for it, so the card appears in place with
+   * no rewrite of the reply's `content`.
    *
-   * A **plain POST that returns the updated message**, not a stream: the slot disables itself
-   * and shows a generating state while it waits (the insight button's precedent), and the reply
-   * is the row the client already renders. Gated by the session lock like every other session
-   * write, and refused while a turn is streaming: the auto pass is already doing this work.
+   * A **plain POST that returns the updated message**, not a stream: the control disables
+   * itself and shows a generating state while it waits (the insight button's precedent), and
+   * the reply is the row the client already renders. Gated by the session lock like every
+   * other session write, and refused while a turn is streaming: the auto pass is already at
+   * work.
    */
   app.post(
     "/api/sessions/:id/messages/:messageId/artifacts/repair",
@@ -2728,25 +2736,18 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         return reply.code(409).send(apiError("TURN_IN_PROGRESS", "a reply is still being generated"));
       }
 
-      const body = request.body as { start?: unknown; overwrite?: unknown } | undefined;
+      const body = request.body as
+        | { start?: unknown; callId?: unknown; overwrite?: unknown }
+        | undefined;
       const start =
         typeof body?.start === "number" && Number.isFinite(body.start) ? body.start : null;
-      if (start === null) {
-        return reply.code(400).send(apiError("INVALID_FIELD", "start must be a number"));
-      }
-
-      // The marker is addressed by its offset in the content: unique per message, and the one
-      // piece of it a client can hold without re-deriving identities. A marker an artifact call
-      // already answers is refused the same way as one that is not there — both mean "the
-      // message has moved on", and distinguishing them would make offsets probeable.
-      const marker = parseArtifactMarkers(message.content).find((m) => m.start === start);
-      const stillMissing =
-        marker !== undefined &&
-        unmatchedArtifactMarkers(message.content, message.toolCalls ?? []).some(
-          (m) => m.start === start
-        );
-      if (!marker || !stillMissing) {
-        return reply.code(404).send(apiError("ARTIFACT_NOT_FOUND", "no missing artifact there"));
+      const callId =
+        typeof body?.callId === "string" && body.callId.trim() ? body.callId : null;
+      // Exactly one addressing mode — ambiguous or empty both mean the caller is wrong.
+      if ((start === null) === (callId === null)) {
+        return reply
+          .code(400)
+          .send(apiError("INVALID_FIELD", "exactly one of start or callId is required"));
       }
 
       const ctx = turnContext(owned.session, owned.workspace, {
@@ -2756,16 +2757,45 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       });
 
       /*
-       * A file marker whose path already holds a live file is a decision rather than a repair:
+       * Resolve the target through the same programmatic worklist the turn uses, and read it
+       * back by whichever address the client held: a marker offset or the originating call.
+       * A target not on that list means the artifact is actually there — refused the same 404
+       * a nonexistent address gets, so neither offsets nor call ids can be probed.
+       */
+      const presence: ArtifactPresenceContext = {
+        db,
+        userId,
+        sessionId: id,
+        workspaceSlug: owned.workspace.slug,
+        roots: {
+          workspaceDir: owned.workspace.workdirPath,
+          sessionDir: ctx.sessionDirPath,
+        },
+      };
+      const targets = collectRepairTargets(
+        message.content,
+        message.toolCalls ?? [],
+        (t) => artifactPresent(presence, t)
+      );
+      const target =
+        start !== null
+          ? targets.find((t) => t.markerStart === start)
+          : targets.find((t) => t.callId === callId);
+      if (!target) {
+        return reply.code(404).send(apiError("ARTIFACT_NOT_FOUND", "no missing artifact there"));
+      }
+
+      /*
+       * A file target whose path already holds a file is a decision rather than a repair:
        * the bytes may be the model's from an earlier turn or the user's own. The first request
        * answers `ARTIFACT_EXISTS`; only an explicit `overwrite: true` replaces them.
        */
-      const existing = fileMarkerExists(db, {
+      const existing = fileTargetExists(db, {
         userId,
         workspaceSlug: owned.workspace.slug,
         sessionId: id,
         defaultLocation: ctx.writeLocation,
-        marker,
+        target,
         roots: {
           workspaceDir: owned.workspace.workdirPath,
           sessionDir: ctx.sessionDirPath,
@@ -2793,7 +2823,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           defaultLocation: ctx.writeLocation,
           content: message.content,
           userMessage: preceding?.content ?? null,
-          marker,
+          target,
           tools: ctx.tools,
           repairer: makeArtifactRepairer({
             provider: ctx.provider,
@@ -5675,33 +5705,34 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
   /**
    * How many missing artifacts one turn repairs automatically.
    *
-   * A reply with more unanswered markers than this is one whose author went badly wrong, and
-   * repairing a whole page of artifacts is the manual control's job rather than this pass's.
+   * A reply with more missing artifacts than this is one whose author went badly wrong, and
+   * repairing a whole page of them is the manual control's job rather than this pass's.
    * The cap also bounds the extra wait: the repairs run concurrently, so it is at most one
    * repair call's latency, not a sum.
    */
   const MAX_MISSING_ARTIFACT_REPAIRS = 3;
 
   /**
-   * Complete the inline markers a finished reply left unanswered, before it is persisted.
+   * Programmatically verify the artifacts a finished reply produced and regenerate the ones
+   * missing, before the reply is persisted.
    *
-   * The failure this answers is a reply that *points at* a diagram, figure or file with an
-   * inline marker and then never calls the tool that produces it. The marker is prose and the
-   * call is a tool decision, so the two can come apart; the client's rendering has always
-   * shown that as a dangling slot, and this is the server half — one repair call per missing
-   * marker, then the **real artifact tool** is invoked, so the object lands through the one
-   * writer the agent loop uses and the synthetic call is appended to the message that asked
-   * for it. The card then appears in place, and every consumer of a tool call (the 图表 panel,
-   * the thread classifier, the replayed history) sees an ordinary one.
+   * Detection lives in `artifactVerify.ts` and is pure program — call output, database rows
+   * and on-disk bytes — never an LLM: a marker with no call, a marker whose call **failed**,
+   * an artifact call that failed with no marker, and a call whose reported success is not
+   * backed by its file or row all produce targets. Only then does this spend model calls —
+   * one repair per target, with the **real artifact tool** invoked, so the object lands
+   * through the one writer the agent loop uses and the synthetic call is appended to the
+   * message that asked for it. Every consumer of a tool call (the 图表 panel, the thread
+   * classifier, the replayed history) then sees an ordinary one.
    *
    * Deliberately **before** the assistant row is written, not after: `message_done` then
    * carries the complete message, so no new event type and no client update path are needed,
    * and nothing can race a later turn. It **never throws**: a repair that fails leaves the
-   * marker exactly as it was, and the manual control on the dangling slot is the way to it.
-   * A stopped or suspended turn is skipped entirely — the user ended that reply, or it is
-   * waiting on an answer the artifacts may depend on.
+   * target missing, and the manual controls (dangling slot, failure card, panel row) are the
+   * way to it. A stopped or suspended turn is skipped entirely — the user ended that reply,
+   * or it is waiting on an answer the artifacts may depend on.
    */
-  async function repairMissingArtifacts(input: {
+  async function verifyAndRepairArtifacts(input: {
     userId: string;
     session: Session;
     ctx: TurnContext;
@@ -5710,11 +5741,20 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
     toolCalls: readonly ToolCall[];
     signal?: AbortSignal;
   }): Promise<ToolCall[]> {
-    const markers = unmatchedArtifactMarkers(input.content, input.toolCalls).slice(
-      0,
-      MAX_MISSING_ARTIFACT_REPAIRS
-    );
-    if (markers.length === 0) return [];
+    const presence: ArtifactPresenceContext = {
+      db,
+      userId: input.userId,
+      sessionId: input.session.id,
+      workspaceSlug: input.ctx.workspaceSlug,
+      roots: {
+        workspaceDir: input.ctx.workspaceDirPath,
+        sessionDir: input.ctx.sessionDirPath,
+      },
+    };
+    const targets = collectRepairTargets(input.content, input.toolCalls, (t) =>
+      artifactPresent(presence, t)
+    ).slice(0, MAX_MISSING_ARTIFACT_REPAIRS);
+    if (targets.length === 0) return [];
 
     const repairer = makeArtifactRepairer({
       provider: input.ctx.provider,
@@ -5732,20 +5772,20 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
       }),
     });
 
-    const attempts = markers.map(async (marker): Promise<ToolCall | null> => {
+    const attempts = targets.map(async (target): Promise<ToolCall | null> => {
       if (input.signal?.aborted) return null;
       /*
-       * A file that already exists is not overwritten automatically. The marker may be
-       * pointing at something from an earlier turn, and bytes the user can see are not this
-       * pass's to replace — the manual control asks before it does.
+       * A file that already exists is not overwritten automatically. The target may be a
+       * path from an earlier turn, and bytes the user can see are not this pass's to replace
+       * — the manual control asks before it does.
        */
       if (
-        fileMarkerExists(db, {
+        fileTargetExists(db, {
           userId: input.userId,
           workspaceSlug: input.ctx.workspaceSlug,
           sessionId: input.session.id,
           defaultLocation: input.ctx.writeLocation,
-          marker,
+          target,
           roots: {
             workspaceDir: input.ctx.workspaceDirPath,
             sessionDir: input.ctx.sessionDirPath,
@@ -5762,7 +5802,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           defaultLocation: input.ctx.writeLocation,
           content: input.content,
           userMessage: input.userMessage,
-          marker,
+          target,
           tools: input.ctx.tools,
           repairer,
         });
@@ -5778,7 +5818,7 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
         // a warning; anything else may be a provider outage and is recorded.
         if (!(err instanceof ArtifactToolUnavailableError)) {
           app.log.warn(
-            { err, sessionId: input.session.id, kind: marker.kind },
+            { err, sessionId: input.session.id, kind: target.kind },
             "artifact repair failed"
           );
         }
@@ -5871,15 +5911,15 @@ export default async function routes(app: FastifyInstance, opts: RoutesOptions):
           `未参与理解：当前模型不支持图片输入。`;
 
     /*
-     * Complete the artifacts this reply referenced but never produced, **before** the row is
-     * written — the repair pass's own docblock has the reasoning. Two endings are skipped:
-     * a stopped turn, because the user ended that reply, and a suspended one, because the
-     * artifacts may depend on the answer that has not arrived. A truncated turn is repaired
-     * like any other: it is the ending where a missing artifact is most likely.
+     * Verify the artifacts this reply produced and complete the ones missing, **before** the
+     * row is written — the verification pass's own docblock has the reasoning. Two endings are
+     * skipped: a stopped turn, because the user ended that reply, and a suspended one, because
+     * the artifacts may depend on the answer that has not arrived. A truncated turn is
+     * verified like any other: it is the ending where a missing artifact is most likely.
      */
     const repairedCalls =
       !result.stopped && !result.awaiting
-        ? await repairMissingArtifacts({
+        ? await verifyAndRepairArtifacts({
             userId,
             session,
             ctx,

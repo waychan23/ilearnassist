@@ -349,9 +349,10 @@ test("the canned replies appear once there is something to reply to", async ({ p
   await expect(quick.getByTestId("quick-ok")).toHaveText("可以");
   await expect(quick.getByTestId("quick-needReview")).toHaveText("有问题，检查一下");
 
-  // The label names the row rather than joining it: a fourth thing shaped like a chip would be
-  // a fourth thing to click, and clicking this one would have to do nothing.
-  await expect(quick.locator("button")).toHaveCount(3);
+  // The label names the row rather than joining it: a thing shaped like a chip that sent
+  // nothing is what it is not. The four answers the row offers are the three quick assents
+  // plus the "有问题，检查一下" follow-up.
+  await expect(quick.locator("button")).toHaveCount(4);
 
   /*
    * Centred, which is a layout claim and so only a browser can answer it. Asserted as
