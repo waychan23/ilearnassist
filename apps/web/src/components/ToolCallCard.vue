@@ -23,6 +23,10 @@ import QuizCard from "./QuizCard.vue";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{ toolCall: ToolCall }>();
+/** Relay the failure cards' repair request up to MessageItem, which owns the repair flow. */
+const emit = defineEmits<{
+  repair: [address: { callId: string; kind: "diagram" | "plot" | "file" }];
+}>();
 
 /**
  * A suspending tool's call is not a tool call to report, it is a question to answer — so it
@@ -146,9 +150,9 @@ const prettyInput = computed(() => {
     costs whatever the column's `gap` charges for a sibling.
   -->
   <template v-if="cardless"></template>
-  <DiagramCard v-else-if="isDiagram" :tool-call="toolCall" />
-  <PlotCard v-else-if="isPlot" :tool-call="toolCall" />
-  <FileCard v-else-if="isFileWrite" :tool-call="toolCall" />
+  <DiagramCard v-else-if="isDiagram" :tool-call="toolCall" @repair="emit('repair', $event)" />
+  <PlotCard v-else-if="isPlot" :tool-call="toolCall" @repair="emit('repair', $event)" />
+  <FileCard v-else-if="isFileWrite" :tool-call="toolCall" @repair="emit('repair', $event)" />
   <AskUserCard v-else-if="card === 'ask'" :tool-call="toolCall" />
   <QuizCard v-else-if="card === 'quiz'" :tool-call="toolCall" />
   <PlanConflictCard v-else-if="card === 'plan'" :tool-call="toolCall" />

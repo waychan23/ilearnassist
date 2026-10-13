@@ -45,6 +45,8 @@ export interface BuildResult {
   legacyCalls: ToolCall[];
   /** Tool-call ids consumed by an inline slot. */
   consumedCallIds: ReadonlySet<string>;
+  /** Artifact calls rendered nowhere — superseded by a later call of one identity. */
+  hiddenCallIds: ReadonlySet<string>;
 }
 
 /** Table-internal token types. */
@@ -186,11 +188,39 @@ export function buildInlineParts(
   }));
 
   const consumedCallIds = new Set(matched.consumedCallIds);
+  /** Calls a later same-identity call superseded — marked so above-text rendering skips them. */
+  const hiddenCallIds = new Set<string>();
   const offsetSlots: Array<{ tc: ToolCall; position: number; order: number }> = [];
   const legacyCalls: ToolCall[] = [];
 
-  for (const tc of toolCalls) {
+  /*
+   * Newest call per artifact identity among everything the markers did not consume.
+   *
+   * A repair appended after a failed or missing call supersedes it — showing both the
+   * failure card and its replacement is only clutter — and two calls of one identity are
+   * one artifact anyway (a second same-name call is a revise). A marker-consumed call is
+   * already removed from this loop, so the winner is the marker's choice or the last call.
+   */
+  const identityLatest = new Map<string, number>();
+  toolCalls.forEach((tc, index) => {
+    if (!isArtifactTool(tc.name)) return;
+    const id = artifactCallIdentity(tc);
+    if (id) identityLatest.set(`${id.kind}:${id.key}:${id.location ?? ""}`, index);
+  });
+
+  for (let index = 0; index < toolCalls.length; index++) {
+    const tc = toolCalls[index]!;
     if (!isArtifactTool(tc.name) || consumedCallIds.has(tc.id)) continue;
+    const identity = artifactCallIdentity(tc);
+    if (
+      identity &&
+      identityLatest.get(`${identity.kind}:${identity.key}:${identity.location ?? ""}`) !==
+        index
+    ) {
+      // Superseded by a later call of one identity — marker or latest handles the artifact.
+      hiddenCallIds.add(tc.id);
+      continue;
+    }
     const offset = tc.contentOffset;
     if (
       artifactCallIdentity(tc) &&
@@ -285,5 +315,5 @@ export function buildInlineParts(
   }
   pushText(content.slice(cursor));
 
-  return { parts, legacyCalls, consumedCallIds };
+  return { parts, legacyCalls, consumedCallIds, hiddenCallIds };
 }

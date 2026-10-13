@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ChatStreamEvent, Diagram, Message, Session } from "@ilearnassist/shared";
@@ -218,6 +218,99 @@ describe("automatic missing-artifact repair", () => {
     const persisted = await messagesOf(session.id);
     expect(persisted.at(-1)!.toolCalls ?? []).toHaveLength(0);
   });
+
+  /**
+   * Regression: a marker whose call **failed** was still treated as answered, because identity
+   * matching never read the output, so no repair ran. The failed call must leave the marker
+   * looking missing.
+   */
+  it("regenerates a diagram when the marker's call failed", async () => {
+    const { session, sessionDirPath } = await freshSession();
+    llm.setTurns([
+      {
+        // The model calls the diagram tool with an empty source — refused with `Tool error: …`.
+        content: "如下图：\n\n[[artifact:diagram/ghost]]",
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "ghost", source: "", summary: "坏的" } },
+        ],
+      },
+      { content: "先这样。" },
+      {
+        // Repair turn: valid source; pinned identity already matches, but still asserted.
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "ghost", source: FLOW, summary: "好的" } },
+        ],
+      },
+    ]);
+
+    const { res, events } = await chat(session.id, { message: "画个图" });
+
+    expect(res.statusCode).toBe(200);
+    expect(events.at(-1)).toEqual({ type: "done" });
+    const done = events.find((e) => e.type === "message_done") as { message: Message };
+    // The failed call and the repair call both belong to the message.
+    const calls = done.message.toolCalls ?? [];
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.output).toMatch(/^Tool error:/);
+    expect(calls[1]!.output).toBeTruthy();
+    expect(existsSync(join(sessionDirPath, "ghost.mmd"))).toBe(true);
+    const diagrams = await diagramsOf(session.id);
+    expect(diagrams.map((d) => d.name)).toEqual(["ghost.mmd"]);
+    expect(repairRequests()).toHaveLength(1);
+  });
+
+  it("retries an artifact call that failed with no marker", async () => {
+    const { session, sessionDirPath } = await freshSession();
+    llm.setTurns([
+      {
+        content: "我来画。",
+        // Invalid name/path — the tool refuses before writing.
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "ghost", source: "", summary: "坏的" } },
+        ],
+      },
+      { content: "结束。" },
+      {
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "ghost", source: FLOW, summary: "好的" } },
+        ],
+      },
+    ]);
+
+    const { res } = await chat(session.id, { message: "画个图" });
+
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(join(sessionDirPath, "ghost.mmd"))).toBe(true);
+    const done = parseSse(res.body).find((e) => e.type === "message_done") as {
+      message: Message;
+    };
+    expect(done.message.toolCalls).toHaveLength(2);
+    expect(repairRequests()).toHaveLength(1);
+  });
+
+  it("issues one repair when a marker and its failed call name one identity", async () => {
+    const { session } = await freshSession();
+    llm.setTurns([
+      {
+        // Marker names the same diagram the (failing) call attempts.
+        content: "见 [[artifact:diagram/ghost]]",
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "ghost", source: "", summary: "坏的" } },
+        ],
+      },
+      { content: "。" },
+      {
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "ghost", source: FLOW, summary: "好" } },
+        ],
+      },
+    ]);
+
+    await chat(session.id, { message: "画个图" });
+
+    // One target, one repair — not a marker target and a call target counted twice.
+    expect(repairRequests()).toHaveLength(1);
+  });
 });
 
 describe("POST /api/sessions/:id/messages/:messageId/artifacts/repair", () => {
@@ -299,10 +392,123 @@ describe("POST /api/sessions/:id/messages/:messageId/artifacts/repair", () => {
     expect(accepted.statusCode).toBe(200);
     expect(readFileSync(join(sessionDirPath, "notes.md"), "utf8")).toBe("repaired");
   });
+
+  it("completes a failed call when addressed by call id", async () => {
+    const { session, sessionDirPath } = await freshSession();
+    llm.setTurns([
+      {
+        content: "我来画。",
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "late", source: "", summary: "坏的" } },
+        ],
+      },
+      { content: "结束。" },
+    ]);
+    await chat(session.id, { message: "画个图" });
+    const assistant = (await messagesOf(session.id)).at(-1)!;
+    const failedCall = assistant.toolCalls![0]!;
+    expect(failedCall.output).toMatch(/^Tool error:/);
+
+    llm.setTurns([
+      {
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "late", source: FLOW, summary: "好的" } },
+        ],
+      },
+    ]);
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/messages/${assistant.id}/artifacts/repair`,
+      payload: { callId: failedCall.id },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(join(sessionDirPath, "late.mmd"))).toBe(true);
+    const { message } = res.json<{ message: Message }>();
+    expect(message.toolCalls).toHaveLength(2);
+
+    // Already repaired — the call id no longer resolves to a missing target.
+    const again = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/messages/${assistant.id}/artifacts/repair`,
+      payload: { callId: failedCall.id },
+    });
+    expect(again.statusCode).toBe(404);
+  });
+
+  it("repairs a marker whose call failed, addressed by its offset", async () => {
+    const { session, sessionDirPath } = await freshSession();
+    llm.setTurns([
+      {
+        content: "见 [[artifact:diagram/late]]",
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "late", source: "", summary: "坏的" } },
+        ],
+      },
+      { content: "。" },
+    ]);
+    await chat(session.id, { message: "画个图" });
+    const assistant = (await messagesOf(session.id)).at(-1)!;
+    const start = assistant.content.indexOf("[[artifact:diagram/late]]");
+
+    llm.setTurns([
+      {
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "late", source: FLOW, summary: "好的" } },
+        ],
+      },
+    ]);
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/messages/${assistant.id}/artifacts/repair`,
+      payload: { start },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(join(sessionDirPath, "late.mmd"))).toBe(true);
+  });
+
+  it("restores a successful diagram whose file later vanished", async () => {
+    const { session, sessionDirPath } = await freshSession();
+    llm.setTurns([
+      {
+        content: "画好了。",
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "late", source: FLOW, summary: "好的" } },
+        ],
+      },
+      { content: "完成。" },
+    ]);
+    await chat(session.id, { message: "画个图" });
+    const assistant = (await messagesOf(session.id)).at(-1)!;
+    const callId = assistant.toolCalls![0]!.id;
+
+    // External deletion after the turn: the row survives, the bytes do not.
+    const mmd = join(sessionDirPath, "late.mmd");
+    expect(existsSync(mmd)).toBe(true);
+    rmSync(mmd);
+
+    llm.setTurns([
+      {
+        toolCalls: [
+          { name: "ila_diagram", args: { name: "late", source: FLOW, summary: "补的" } },
+        ],
+      },
+    ]);
+    const res = await env.inject({
+      method: "POST",
+      url: `/api/sessions/${session.id}/messages/${assistant.id}/artifacts/repair`,
+      payload: { callId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(mmd)).toBe(true);
+    expect((await diagramsOf(session.id))[0]!.fileMissing).toBe(false);
+  });
 });
 
 describe("repairArtifactMarker", () => {
-  it("refuses when the marker's tool is not assembled", async () => {
+  it("refuses when the target's tool is not assembled", async () => {
     await expect(
       repairArtifactMarker({
         userId: "u",
@@ -310,7 +516,7 @@ describe("repairArtifactMarker", () => {
         sessionId: "s",
         defaultLocation: "session",
         content: "[[artifact:diagram/x]]",
-        marker: { kind: "diagram", handle: "x", start: 0, end: 22, startLine: 0 },
+        target: { kind: "diagram", handle: "x", markerStart: 0 },
         tools: [],
         repairer: async () => ({ name: "x", source: "a", summary: "b" }),
       })

@@ -3104,6 +3104,8 @@ export interface AppDb {
   /** Owner-scoped list, the API view's own read. Owner in the `WHERE`, not only in the
    *  resolution the route performs first. */
   listPlotsForUser(userId: string, sessionId: string): PlotRecord[];
+  /** One plot row by session and canonical name, no owner — `getDiagramBySessionName`'s shape. */
+  getPlotBySessionName(sessionId: string, name: string): PlotRecord | undefined;
   /**
    * Insert, or revise in place when the conversation already has a plot with this name.
    *
@@ -6853,6 +6855,11 @@ export function createDb(dbPath: string, options: CreateDbOptions = {}): AppDb {
 
     listPlotsForUser(userId, sessionId) {
       return (stmtListPlotsForUser.all({ userId, sessionId }) as PlotRow[]).map(mapPlot);
+    },
+
+    getPlotBySessionName(sessionId, name) {
+      const row = stmtGetPlotBySessionName.get(sessionId, name) as PlotRow | undefined;
+      return row ? mapPlot(row) : undefined;
     },
 
     upsertSessionPlot(input) {

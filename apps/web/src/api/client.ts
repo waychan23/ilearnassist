@@ -920,7 +920,7 @@ export const api = {
   repairArtifact: (
     sessionId: string,
     messageId: string,
-    input: { start: number; overwrite?: boolean }
+    input: { start?: number; callId?: string; overwrite?: boolean }
   ) =>
     request<{ message: Message }>(
       `/sessions/${sessionId}/messages/${messageId}/artifacts/repair`,

@@ -2588,35 +2588,48 @@ export const useAppStore = defineStore("app", () => {
   }
 
   /**
-   * Generate the artifact one dangling inline marker names, in place.
+   * Generate the artifact one target names — a dangling marker, a failed artifact card, or a
+   * 图表 panel row whose file is gone — in place.
    *
-   * The server answers with the whole updated message, so the row is replaced rather than the
-   * conversation re-read: only this message changed, and a full `listMessages` on a long
-   * conversation would cost a page of requests for one card. `"exists"` is not an error — it
-   * is the file-overwrite decision the caller puts to the user, and the second call carries
-   * `overwrite`. Anything else is reported the way every failed action is.
+   * The target is addressed by a marker offset or the originating call id. MessageItem knows
+   * its own message; a panel-row repair names only a callId, so the message is located in the
+   * loaded transcript. The server answers with the whole updated message, so the row is
+   * replaced rather than the conversation re-read: only this message changed, and a full
+   * `listMessages` on a long conversation would cost a page of requests for one card.
+   * `"exists"` is not an error — it is the file-overwrite decision the caller puts to the
+   * user, and the second call carries `overwrite`. Anything else is reported the way every
+   * failed action is.
    *
    * The 图表 panel learns about the new row the same way it learns about a tool call landing
    * mid-turn: an event, so a repair from the transcript does not leave a panel that is open
    * showing a list without it. A written file has no panel — its freshness rule is the tree's,
    * refreshed silently at the end of a turn — so the file tree is re-read the same way.
    */
-  async function repairArtifact(
-    messageId: string,
-    start: number,
-    kind: ArtifactKind,
-    overwrite = false
-  ): Promise<"ok" | "exists" | "failed"> {
+  async function repairArtifact(input: {
+    messageId?: string;
+    start?: number;
+    callId?: string;
+    kind: ArtifactKind;
+    overwrite?: boolean;
+  }): Promise<"ok" | "exists" | "failed"> {
     const sessionId = activeSessionId.value;
     if (!sessionId) return "failed";
+    let messageId = input.messageId;
+    if (!messageId && input.callId) {
+      messageId = messages.value.find((m) =>
+        (m.toolCalls ?? []).some((tc) => tc.id === input.callId)
+      )?.id;
+    }
+    if (!messageId) return "failed";
     try {
       const { message } = await api.repairArtifact(sessionId, messageId, {
-        start,
-        ...(overwrite ? { overwrite: true } : {}),
+        ...(input.start !== undefined ? { start: input.start } : {}),
+        ...(input.callId ? { callId: input.callId } : {}),
+        ...(input.overwrite ? { overwrite: true } : {}),
       });
       messages.value = messages.value.map((m) => (m.id === message.id ? message : m));
-      if (kind === "diagram") emitWidgetEvent({ type: "diagram.changed", sessionId });
-      else if (kind === "plot") emitWidgetEvent({ type: "plot.changed", sessionId });
+      if (input.kind === "diagram") emitWidgetEvent({ type: "diagram.changed", sessionId });
+      else if (input.kind === "plot") emitWidgetEvent({ type: "plot.changed", sessionId });
       else void refreshFileTree({ silent: true });
       return "ok";
     } catch (e) {

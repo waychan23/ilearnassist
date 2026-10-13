@@ -228,6 +228,19 @@ export function isArtifactTool(name: string): boolean {
   return (ARTIFACT_TOOL_NAMES as readonly string[]).includes(name);
 }
 
+/**
+ * Whether a tool call's output is the loop's recorded failure rather than a result.
+ *
+ * The agent loop flattens a thrown tool into `Tool error: <message>` and a name the tool set
+ * does not contain into `Unknown tool "<name>"` — both strings a tool never legitimately
+ * produces. This is the one place that convention is read, shared by the server's programmatic
+ * verification and any client that must tell a failed call from a finished one: success was
+ * previously only "output is present", which a `Tool error:` string satisfies.
+ */
+export function isToolErrorOutput(output: string | undefined): boolean {
+  return !!output && (output.startsWith("Tool error:") || output.startsWith(`Unknown tool "`));
+}
+
 /* ------------------------------ inline markers ------------------------------ */
 
 /** Opening text of an inline-artifact marker; the closing counterpart. */
@@ -479,7 +492,7 @@ export function matchArtifactMarkers(
 
   for (const marker of markers) {
     const mid = markerIdentity(marker);
-    const entry = entries.find((e): boolean => {
+    const identityMatches = (e: (typeof entries)[number]): boolean => {
       const id = e.identity;
       if (!id || consumed.has(e.tc.id)) return false;
       if (id.kind !== marker.kind || id.key !== mid.key) return false;
@@ -487,7 +500,17 @@ export function matchArtifactMarkers(
         return false;
       }
       return true;
-    });
+    };
+    /*
+     * Prefer a call that actually succeeded: a failed (`Tool error:`) call keeps a valid
+     * identity, but once a repair call for the same artifact exists it must answer the
+     * marker rather than the failure. Two passes — a successful match first, then any
+     * identity match — so the single-failed-call case still matches and reads as a failure
+     * card instead of a dangling marker.
+     */
+    const entry =
+      entries.find((e) => identityMatches(e) && !isToolErrorOutput(e.tc.output)) ??
+      entries.find(identityMatches);
     if (entry) consumed.add(entry.tc.id);
     matches.push({ marker, ...(entry ? { call: entry.tc } : {}) });
   }

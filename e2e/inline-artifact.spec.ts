@@ -251,12 +251,65 @@ test("a marker whose artifact fails keeps the failure card in place", async ({
         ],
       },
       { content: "完成。" },
+      // No repair turn is scripted: the two automatic repair attempts fall to the fake's
+      // default plain answer, so the turn settles with the failure card and its control.
     ],
   });
 
   await send(page, "画空图");
   await expect(page.getByTestId("diagram-failure")).toBeVisible({ timeout: 20_000 });
 
+  const order = await verticalOrder(page, "diagram-card");
+  expect(order.before).toBeLessThanOrEqual(order.card);
+  expect(order.card).toBeLessThan(order.after);
+});
+
+test("the failure card's repair button regenerates the diagram", async ({
+  page,
+  request,
+}) => {
+  await freshSession(page);
+  await scriptLlm(request, {
+    turns: [
+      {
+        content: "引用前的文字。\n\n[[artifact:diagram/empty]]\n\n引用后的文字。",
+        toolCalls: [
+          {
+            id: "call_d1",
+            name: "ila_diagram",
+            args: { name: "empty", source: "   ", summary: "空" },
+          },
+        ],
+      },
+      { content: "完成。" },
+    ],
+  });
+
+  await send(page, "画空图");
+  await expect(page.getByTestId("diagram-failure")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("diagram-repair")).toBeVisible();
+
+  // Queue the repair answer now that the automatic pass has given up, then press the control.
+  await scriptLlm(request, {
+    turns: [
+      {
+        toolCalls: [
+          {
+            id: "manual_d1",
+            name: "ila_diagram",
+            args: { name: "empty", source: FLOW, summary: "补的图" },
+          },
+        ],
+      },
+    ],
+  });
+  await page.getByTestId("diagram-repair").click();
+
+  // The new call supersedes the failure: the same card renders a ready diagram, in place.
+  await expect(
+    page.getByTestId("diagram-card").last().getByTestId("mermaid")
+  ).toHaveAttribute("data-render-state", "ready", { timeout: 20_000 });
+  await expect(page.getByTestId("diagram-failure")).toHaveCount(0);
   const order = await verticalOrder(page, "diagram-card");
   expect(order.before).toBeLessThanOrEqual(order.card);
   expect(order.card).toBeLessThan(order.after);

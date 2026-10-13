@@ -6,6 +6,7 @@ import {
   isInteractiveTool,
   stripInlineMarkers,
   TABLE_TOOL_NAME,
+  type ArtifactKind,
   type ArtifactMarker,
   type Message,
   type ToolCall,
@@ -120,11 +121,15 @@ const inline = computed(() =>
 
 /**
  * Calls still rendered above the reply: background actions and artifact calls the inline
- * builder could not place (no marker, no usable offset), in original order.
+ * builder could not place (no marker, no usable offset), in original order. A call the
+ * builder hides — superseded by a later same-identity call — stays out.
  */
 const aboveCalls = computed(() =>
   toolCalls.value.filter(
-    (tc) => !isInteractiveTool(tc.name) && !inline.value.consumedCallIds.has(tc.id)
+    (tc) =>
+      !isInteractiveTool(tc.name) &&
+      !inline.value.consumedCallIds.has(tc.id) &&
+      !inline.value.hiddenCallIds.has(tc.id)
   )
 );
 
@@ -479,34 +484,52 @@ async function regenerate(): Promise<void> {
 }
 
 /**
- * Which dangling slot, if any, is generating right now — the marker's offset in the content,
- * which is what the repair route is addressed by. Local to the message because only one slot
- * in one bubble can be pressed at a time, and the turn is over by the time this renders.
+ * Which repair, if any, is generating right now — `s<marker offset>` or `c<call id>`, the two
+ * ways a target is addressed. Local to the message because only one repair in one bubble can
+ * be pressed at a time, and the turn is over by then.
  */
-const repairingStart = ref<number | null>(null);
+const repairing = ref<string | null>(null);
+
+/** One repair target, as the failure cards and the dangling slot address it. */
+interface RepairAddress {
+  start?: number;
+  callId?: string;
+  kind: ArtifactKind;
+}
+
+function repairKey(addr: RepairAddress): string {
+  return addr.start !== undefined ? `s${addr.start}` : `c${addr.callId ?? ""}`;
+}
 
 /**
- * Generate the artifact a dangling slot names.
+ * Generate one missing artifact, by marker offset or by originating call.
  *
  * A file path that already holds a live file is a decision rather than a repair, so the first
  * request comes back `"exists"` and the confirmation is put here — the same shape the delete
  * and regenerate controls use. The store reports every other failure through the toast.
  */
-async function repairArtifact(marker?: ArtifactMarker): Promise<void> {
+async function repairArtifactAt(addr: RepairAddress): Promise<void> {
   const messageId = props.message?.id;
-  if (!messageId || !marker || repairingStart.value !== null) return;
-  repairingStart.value = marker.start;
+  if (!messageId || repairing.value !== null) return;
+  const key = repairKey(addr);
+  repairing.value = key;
   try {
-    const outcome = await store.repairArtifact(messageId, marker.start, marker.kind);
+    const outcome = await store.repairArtifact({ messageId, ...addr });
     if (outcome !== "exists") return;
     const ok = await confirm({
       message: t("inlineArtifact.overwriteConfirm"),
       danger: true,
     });
-    if (ok) await store.repairArtifact(messageId, marker.start, marker.kind, true);
+    if (ok) await store.repairArtifact({ messageId, ...addr, overwrite: true });
   } finally {
-    repairingStart.value = null;
+    repairing.value = null;
   }
+}
+
+/** Dangling-slot wrapper: the repair for a marker no call answered. */
+function repairMarker(marker?: ArtifactMarker): Promise<void> {
+  if (!marker) return Promise.resolve();
+  return repairArtifactAt({ start: marker.start, kind: marker.kind });
 }
 
 const usage = computed(() => props.message?.usage ?? null);
@@ -668,7 +691,11 @@ const usageText = computed(() => {
             :data-slot-status="part.status"
             data-note-skip
           >
-            <ToolCallCard v-if="part.toolCall" :tool-call="part.toolCall" />
+            <ToolCallCard
+              v-if="part.toolCall"
+              :tool-call="part.toolCall"
+              @repair="repairArtifactAt"
+            />
             <div
               v-else-if="part.status === 'pending'"
               class="slot-state pending"
@@ -692,14 +719,14 @@ const usageText = computed(() => {
                 v-if="part.marker"
                 class="icon-btn act repair"
                 data-testid="artifact-repair"
-                :disabled="repairingStart !== null"
+                :disabled="repairing !== null"
                 :title="t('inlineArtifact.repair')"
                 :aria-label="t('inlineArtifact.repair')"
-                @click="repairArtifact(part.marker)"
+                @click="repairMarker(part.marker)"
               >
-                <Icon name="retry" :class="{ spin: repairingStart === part.marker.start }" />
+                <Icon name="retry" :class="{ spin: repairing === `s${part.marker.start}` }" />
                 {{
-                  repairingStart === part.marker.start
+                  repairing === `s${part.marker.start}`
                     ? t("inlineArtifact.repairing")
                     : t("inlineArtifact.repair")
                 }}
